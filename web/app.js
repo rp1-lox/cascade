@@ -1066,6 +1066,7 @@ async function updatePlumes() {
         (wfId === VARIANT_PREVIEW.wfModuleID || !VARIANT_PREVIEW.wfModuleID)) {
       const at = VARIANT_PREVIEW.attach;
       effTemplates = [{ kind: 'template', from: 'variant', editBase: '__variantpreview__',
+        inlineTree: VARIANT_PREVIEW.inlineTree || null,
         node: { h: 'TEMPLATE', k: [
           ['templateName', VARIANT_PREVIEW.template],
           ['overrideParentTransform', at.overrideParentTransform || ''],
@@ -1081,6 +1082,10 @@ async function updatePlumes() {
         // inline EFFECT node: no server round-trip needed, the compiled node IS the effect.
         if (isDeprecated(keyOf(t.node, 'name'))) continue;
         data = { node: t.node };
+      } else if (t.inlineTree) {
+        // §10 drawer: render the IN-MEMORY edited template tree live (skip disabled effects).
+        data = { node: { h: t.inlineTree.h, k: t.inlineTree.k,
+          c: (t.inlineTree.c || []).filter(c => c.h !== 'EFFECT' || !window.PlumeEdit.isDisabled(c)) } };
       } else {
         const tn = keyOf(t.node, 'templateName');
         if (!tn || isDeprecated(tn)) continue;
@@ -1467,6 +1472,115 @@ function previewVariant(info, v) {
     },
   } : null;
   refresh();
+}
+
+// ============================================================================
+// §10 Inline plume editor drawer — mounts the shared PlumeEdit module on a
+// variant's plume, with the engine's 3D viewer as the live on-engine preview.
+// ============================================================================
+let PLUME_DRAWER = null;      // { template, ctx, tree, attach, wfModuleID, editable, dirty }
+let SHADER_PARAMS = null;
+let _drawerWired = false;
+
+async function ensureShaderParams() {
+  if (SHADER_PARAMS) return SHADER_PARAMS;
+  try { SHADER_PARAMS = await (await fetch('/api/shaderparams')).json(); } catch (e) { SHADER_PARAMS = {}; }
+  return SHADER_PARAMS;
+}
+
+// Custom dialog (no native modals) — shared markup (#eeOverlay/#eeDialog) with plumelib.
+function openDialog(opts) {
+  return new Promise(resolve => {
+    const ov = $('#eeOverlay'), box = $('#eeDialog'); box.innerHTML = '';
+    box.appendChild(el('h3', null, opts.title || ''));
+    if (opts.message) box.appendChild(el('div', 'eeMsg', opts.message));
+    let getValue = () => true, inp = null;
+    if (opts.kind === 'text') {
+      inp = el('input'); inp.type = 'text'; inp.value = opts.value || ''; box.appendChild(inp);
+      getValue = () => inp.value.trim();
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); finish(getValue()); } });
+    } else if (opts.kind === 'list') {
+      const le = el('div', 'eeList'); let sel = (opts.list && opts.list[0]) ? opts.list[0].value : null;
+      (opts.list || []).forEach((it, i) => {
+        const d = el('div', null, it.label); if (i === 0) d.classList.add('sel');
+        d.addEventListener('click', () => { sel = it.value; [...le.children].forEach(c => c.classList.remove('sel')); d.classList.add('sel'); });
+        d.addEventListener('dblclick', () => finish(it.value));
+        le.appendChild(d);
+      });
+      box.appendChild(le); getValue = () => sel;
+    }
+    const btns = el('div', 'eeBtns');
+    if (opts.kind !== 'alert') { const c = el('button', 'btn', opts.cancelText || 'Cancel'); c.addEventListener('click', () => finish(null)); btns.appendChild(c); }
+    const ok = el('button', 'btn primary', opts.okText || 'OK'); ok.addEventListener('click', () => finish(getValue())); btns.appendChild(ok);
+    box.appendChild(btns);
+    function finish(v) { ov.classList.remove('show'); document.removeEventListener('keydown', kh, true); resolve(v); }
+    function kh(e) { if (e.key === 'Escape') { e.preventDefault(); finish(null); } }
+    document.addEventListener('keydown', kh, true); ov.classList.add('show');
+    setTimeout(() => { if (inp) { inp.focus(); inp.select(); } else ok.focus(); }, 0);
+  });
+}
+
+function drawerStatus(msg, err) { const s = $('#plumeDrawerStatus'); if (s) { s.textContent = msg || ''; s.classList.toggle('err', !!err); } }
+
+function setDrawerPreview() {
+  if (!PLUME_DRAWER || !PART) return;
+  VARIANT_PREVIEW = { part: SELECTED, wfModuleID: PLUME_DRAWER.wfModuleID || '',
+    template: PLUME_DRAWER.template, attach: PLUME_DRAWER.attach, inlineTree: PLUME_DRAWER.tree };
+  updatePlumes();
+}
+
+// Open the drawer on a plume template, editing it live against the current engine's viewer.
+async function openPlumeDrawer(templateName, attach, wfModuleID) {
+  wireDrawerOnce();
+  drawerStatus('Loading ' + templateName + '…');
+  $('#plumeDrawer').classList.remove('hidden');
+  let data;
+  try { data = await (await fetch('/api/plume/get?name=' + encodeURIComponent(templateName))).json(); }
+  catch (e) { drawerStatus('Load failed: ' + e, true); return; }
+  if (!data || data.error) { drawerStatus('Load failed: ' + ((data && data.error) || 'unknown'), true); return; }
+  const editable = data.source === 'custom';
+  const params = await ensureShaderParams();
+  const tree = data.node;
+  const ctx = { tree, editable, params, openIdx: new Set(), openDialog,
+    onChange: () => { if (PLUME_DRAWER) { PLUME_DRAWER.dirty = true; setDrawerPreview(); } } };
+  PLUME_DRAWER = { template: templateName, ctx, tree, attach: attach || {}, wfModuleID: wfModuleID || '', editable, dirty: false };
+  $('#plumeDrawerTitle').textContent = 'Plume: ' + templateName;
+  $('#plumeDrawerSub').textContent = editable ? '(custom — editable)' : '(mod template — read-only preview; fork it to edit)';
+  $('#plumeDrawerAdd').style.display = editable ? '' : 'none';
+  $('#plumeDrawerSave').style.display = editable ? '' : 'none';
+  drawerStatus('');
+  window.PlumeEdit.mount($('#plumeDrawerBody'), ctx);
+  setDrawerPreview();
+}
+
+function closePlumeDrawer() {
+  const d = $('#plumeDrawer'); if (d) d.classList.add('hidden');
+  PLUME_DRAWER = null; VARIANT_PREVIEW = null;
+  if (window.ModelViewer) updatePlumes();
+}
+
+async function saveDrawerPlume() {
+  if (!PLUME_DRAWER || !PLUME_DRAWER.editable) return;
+  drawerStatus('Saving…');
+  try {
+    const r = await (await fetch('/api/plume/save', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: PLUME_DRAWER.template, tree: PLUME_DRAWER.tree }) })).json();
+    if (r.error) throw new Error(r.error);
+    PLUME_DRAWER.dirty = false;
+    drawerStatus('Saved ✓ — Compile in the Plume Manager to apply in-game.');
+  } catch (ex) { drawerStatus('Save failed: ' + (ex.message || ex), true); }
+}
+
+function wireDrawerOnce() {
+  if (_drawerWired) return; _drawerWired = true;
+  $('#plumeDrawerAdd').addEventListener('click', () => { if (PLUME_DRAWER) window.PlumeEdit.addEffect(PLUME_DRAWER.ctx); });
+  $('#plumeDrawerSave').addEventListener('click', saveDrawerPlume);
+  $('#plumeDrawerClose').addEventListener('click', closePlumeDrawer);
+  const rz = $('#plumeDrawerResize'), dr = $('#plumeDrawer');
+  let dragging = false;
+  rz.addEventListener('mousedown', e => { dragging = true; e.preventDefault(); document.body.style.userSelect = 'none'; });
+  window.addEventListener('mousemove', e => { if (dragging) dr.style.width = Math.max(340, Math.min(window.innerWidth * 0.82, e.clientX)) + 'px'; });
+  window.addEventListener('mouseup', () => { if (dragging) { dragging = false; document.body.style.userSelect = ''; } });
 }
 
 async function fetchVariantInfo(part) {
@@ -1865,6 +1979,20 @@ function buildVariantForm(host, info, preset) {
       } finally { mkCustomBtn.disabled = false; }
     });
     plumeField.appendChild(mkCustomBtn);
+    // Edit the plume inline (full editor drawer) with live preview on this engine.
+    const editBtn = el('button', 'ok', 'Edit plume ✎');
+    editBtn.type = 'button';
+    editBtn.title = 'Open the full plume editor for this variant, previewing live on the engine';
+    editBtn.addEventListener('click', () => {
+      const sub = info.subtypes.find(s => s.name === copySel.value) || info.subtypes[0] || {};
+      const tpl = plumeTplInp.value.trim() || (sub.plume && sub.plume.template) || (info.basePlume && info.basePlume.template) || '';
+      if (!tpl) { inheritNote.textContent = 'No plume to edit yet — pick a template or create a custom one first.'; return; }
+      openPlumeDrawer(tpl, {
+        overrideParentTransform: plumeOptInp.value.trim(), position: plumePosInp.value.trim() || '0,0,0',
+        rotation: plumeRotInp.value.trim() || '0,0,0', scale: plumeScaleInp.value.trim() || '1,1,1',
+      }, info.wfModuleID);
+    });
+    plumeField.appendChild(editBtn);
     const ag = el('div', 'fieldgrid');
     const mkA = (lbl, v) => { const f = el('div', 'f'); f.appendChild(el('label', null, lbl));
       const i = el('input', 'inp'); i.type = 'text'; i.value = v; f.appendChild(i); ag.appendChild(f); return i; };

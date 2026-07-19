@@ -499,7 +499,26 @@ function effSummary(eff){
   return [shortShader, parent].filter(Boolean).join(' → ');
 }
 
+// Shared-editor context for the currently-selected template (used by the PlumeEdit module,
+// which is also mounted in the Engine Editor drawer — one editor implementation, two hosts).
+function curCtx(){
+  if(!CUR) return null;
+  CUR._openIdx = CUR._openIdx || new Set();
+  // memoize per selected template so buildEffects() (which mounts + sets _container) and
+  // addEffectFlow() share ONE ctx object — otherwise addEffect can't find the container.
+  if(!CUR._ctx){
+    CUR._ctx = { tree: CUR.node, editable: CUR.source==='custom', params: PARAMS,
+      openIdx: CUR._openIdx, openDialog: openDialog, onChange: reloadRender };
+  }
+  return CUR._ctx;
+}
 function buildEffects(){
+  const box=$('#plEffects');
+  const ctx=curCtx();
+  if(!ctx){ box.innerHTML=''; return; }
+  window.PlumeEdit.mount(box, ctx);
+}
+function _deadBuildEffects(){
   const box=$('#plEffects'); box.innerHTML='';
   if(!CUR){ return; }
   const editable = !!(CUR.source==='custom');
@@ -815,26 +834,9 @@ function colorRow(node, editable){
 function deepClone(o){ return JSON.parse(JSON.stringify(o)); }
 
 async function addEffectFlow(){
-  if(!CUR || CUR.source!=='custom') return;
-  const pal = await ensurePalette();
-  const effects=(CUR.node.c||[]).filter(c=>c.h==='EFFECT');
-  const list = [];
-  // New effects scaffolded from raw Waterfall models (each renders immediately from a harvested example)
-  for(const m of (pal.models||[])){
-    if(!m.example) continue;
-    list.push({label:'✧ New: '+m.name+(m.description?' — '+m.description:''),
-               value:{kind:'model', model:m}});
-  }
-  for(const m of (pal.extraModels||[])){
-    if(!m.example) continue;
-    list.push({label:'✧ New: '+m.name+' (in-game mesh)', value:{kind:'model', model:m}});
-  }
-  // Duplicate an existing effect in this template
-  effects.forEach((e,i)=> list.push({label:'⧉ Duplicate: '+(kvOf(e,'name')||'effect '+i), value:{kind:'dup', idx:i}}));
-  const pick = await openDialog({kind:'list', title:'Add effect', list, okText:'Add'});
-  if(!pick) return;
-  if(pick.kind==='dup') return duplicateEffect(pick.idx);
-  if(pick.kind==='model') return addEffectFromModel(pick.model);
+  const ctx=curCtx();
+  if(!ctx || !ctx.editable) return;
+  await window.PlumeEdit.addEffect(ctx);
 }
 
 // Scaffold a fresh EFFECT from a Waterfall model's harvested example MODEL block, attached to the

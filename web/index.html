@@ -46,8 +46,28 @@
     <div id="saveMsg"></div>
   </div>
 </div>
+<!-- Inline plume editor drawer (mounts the shared PlumeEdit module on a variant's plume) -->
+<div id="plumeDrawer" class="hidden">
+  <div id="plumeDrawerResize" title="Drag to resize"></div>
+  <div id="plumeDrawerHead">
+    <span id="plumeDrawerTitle">Plume</span>
+    <span id="plumeDrawerSub"></span>
+    <span style="flex:1"></span>
+    <button id="plumeDrawerAdd" class="ghost">+ Add effect</button>
+    <button id="plumeDrawerSave">Save</button>
+    <button id="plumeDrawerClose" class="ghost">Close</button>
+  </div>
+  <div id="plumeDrawerStatus"></div>
+  <div id="plumeDrawerBody"></div>
+</div>
+<!-- Custom dialog overlay (no native modals) reused from the shared editor -->
+<div id="eeOverlay"><div id="eeDialog"></div></div>
+<datalist id="eeControllerList">
+  <option value="throttle"></option><option value="atmosphereDepth"></option><option value="random"></option>
+</datalist>
 <script src="model3d.js?v=11"></script>
 <script src="plume.js?v=16"></script>
-<script src="app.js?v=21"></script>
+<script src="plumeedit.js?v=1"></script>
+<script src="app.js?v=22"></script>
 </body>
 </html>

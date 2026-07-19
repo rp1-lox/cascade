@@ -39,7 +39,27 @@ Grab the latest release, then:
 2. Move the `Cascade` folder into your KSP root — the folder that contains `GameData`.
 3. Run it:
    - **Windows:** double-click `run.bat`
-   - **Linux / macOS:** `./run.sh`
+   - **macOS:** double-click **`Cascade.command`** (double-clicking a `.sh` does nothing on macOS)
+   - **Linux:** `./run.sh`
+
+### macOS notes
+
+- Use `Cascade.command`, not `run.sh` — macOS only opens `.command` files in Terminal.
+- macOS does **not** ship `python3` by default. If Cascade says Python is missing, run this
+  once in Terminal, then double-click again:
+  ```sh
+  xcode-select --install
+  ```
+  (Or install Python from <https://www.python.org/downloads/macos/>.)
+- If Gatekeeper blocks it ("unidentified developer" / "cannot be opened"), clear the
+  download quarantine flag on the folder:
+  ```sh
+  xattr -dr com.apple.quarantine /path/to/Cascade
+  ```
+- If you somehow get `Permission denied`, restore the executable bit:
+  ```sh
+  chmod +x Cascade.command run.sh
+  ```
 
 First launch indexes your installed mods (~1–2 min; near-instant afterward), then opens the
 editor at <http://localhost:8151>. Keep the console window open while you use it.
