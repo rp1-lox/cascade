@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>KSP Plume Library</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  #plApp { display:flex; height:100vh; }
+  #plList { width:320px; min-width:320px; display:flex; flex-direction:column;
+    border-right:1px solid #2c3340; background:var(--bg2); }
+  #plList header { padding:12px 14px 8px; border-bottom:1px solid #2c3340; }
+  #plUl { list-style:none; overflow-y:auto; flex:1; padding:4px 0; margin:0; }
+  #plUl .mod { font-size:11px; text-transform:uppercase; letter-spacing:.06em;
+    color:var(--accent); padding:8px 14px 2px; position:sticky; top:0; background:var(--bg2); }
+  #plUl li { padding:5px 14px; cursor:pointer; border-left:3px solid transparent; font-size:12.5px;
+    font-family:var(--mono); display:flex; justify-content:space-between; gap:8px; }
+  #plUl li:hover { background:var(--bg3); }
+  #plUl li.sel { background:var(--bg3); border-left-color:var(--accent); }
+  #plUl li .uc { color:var(--dim); font-size:10.5px; }
+  #plMain { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+  #plView { flex:1; position:relative; background:#0a0c10; min-height:280px; }
+  #plCanvasWrap { position:absolute; inset:0; }
+  #plErr { position:absolute; inset:0; display:none; align-items:center; justify-content:center;
+    color:var(--err); text-align:center; padding:20px; }
+  #plControls { display:flex; gap:18px; align-items:center; padding:8px 16px;
+    border-top:1px solid #2c3340; border-bottom:1px solid #2c3340; background:var(--bg2); flex-wrap:wrap; }
+  #plControls label { font-size:12px; color:var(--dim); display:flex; align-items:center; gap:6px; }
+  #plEffects { overflow-y:auto; max-height:48vh; padding:10px 16px; }
+  #plEffects .prow { display:grid; grid-template-columns:180px 120px 1fr; gap:8px; align-items:center;
+    font-size:12px; padding:2px 0; }
+  #plEffects .prow label { color:var(--fg); font-family:var(--mono); font-size:11.5px; }
+  #plEffects input[type=number] { width:110px; background:var(--bg); color:var(--fg);
+    border:1px solid #333c4c; border-radius:4px; padding:3px 6px; }
+  #plEffects input[type=range] { width:100%; }
+  #plEffects input[type=color] { width:40px; height:22px; background:none; border:1px solid #333c4c; }
+  #plTop { padding:10px 16px; border-bottom:1px solid #2c3340; display:flex; gap:12px;
+    align-items:center; flex-wrap:wrap; }
+  #plTop h2 { font-family:var(--mono); font-size:16px; color:var(--accent); }
+  .btn { background:var(--bg3); color:var(--fg); border:1px solid #333c4c; border-radius:5px;
+    padding:5px 12px; cursor:pointer; font-size:12px; }
+  .btn:hover { border-color:var(--accent); }
+  .btn.primary { background:var(--accent); color:#0a0c10; border-color:var(--accent); font-weight:600; }
+  #plExportBox { display:none; padding:10px 16px; }
+  #plExportBox pre { max-height:40vh; overflow:auto; background:var(--bg); border:1px solid #333c4c;
+    border-radius:6px; padding:10px; font-family:var(--mono); font-size:11.5px; white-space:pre; }
+
+  /* ---- per-effect accordion ---- */
+  .effRow { border:1px solid #333c4c; border-radius:6px; margin-bottom:8px; background:var(--bg2); }
+  .effHead { display:flex; align-items:center; gap:10px; padding:8px 10px; cursor:pointer; }
+  .effHead .effName { font-family:var(--mono); font-size:12.5px; color:var(--fg); }
+  .effHead .effSummary { font-size:11px; color:var(--dim); flex:1; }
+  .effToggle { width:34px; height:18px; border-radius:10px; background:#333c4c; position:relative;
+    cursor:pointer; flex-shrink:0; transition:background .15s; }
+  .effToggle.on { background:var(--accent); }
+  .effToggle::after { content:''; position:absolute; top:2px; left:2px; width:14px; height:14px;
+    border-radius:50%; background:#e8ecf1; transition:left .15s; }
+  .effToggle.on::after { left:18px; background:#0a0c10; }
+  .effBody { display:none; padding:8px 10px 12px; border-top:1px solid #2c3340; }
+  .effRow.open .effBody { display:block; }
+  .effRow.disabled .effName, .effRow.disabled .effSummary { opacity:.45; }
+  .effActions { display:flex; gap:6px; }
+  .effActions .btn { font-size:11px; padding:3px 9px; }
+  .effSection { margin:10px 0 4px; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em;
+    color:var(--accent); }
+  .effSection:first-child { margin-top:2px; }
+  .effOffsetRow { display:flex; gap:8px; align-items:center; font-size:11.5px; margin:4px 0; }
+  .effOffsetRow label { width:120px; flex-shrink:0; color:var(--dim); font-family:var(--mono); }
+  .effOffsetRow input[type=number] { width:70px; background:var(--bg); color:var(--fg);
+    border:1px solid #333c4c; border-radius:4px; padding:2px 5px; font-size:11px; }
+  .modList { font-size:11px; color:var(--dim); font-family:var(--mono); }
+  .modList div { padding:2px 0; }
+
+  /* ---- MODIFIER editor (per-effect "Modifiers (N)" subsection) ---- */
+  .eeModDetails { margin:10px 0 4px; border:1px solid #2c3340; border-radius:6px; background:var(--bg); }
+  .eeModDetails > summary { cursor:pointer; padding:6px 10px; font-size:10.5px; text-transform:uppercase;
+    letter-spacing:.05em; color:var(--accent); list-style:none; }
+  .eeModDetails > summary::-webkit-details-marker { display:none; }
+  .eeModDetails > summary::before { content:'▸ '; }
+  .eeModDetails[open] > summary::before { content:'▾ '; }
+  .eeModBlock { margin:0 10px 10px; padding:8px 10px; border:1px solid #2c3340; border-radius:6px; background:var(--bg2); }
+  .eeModBlock:last-child { margin-bottom:10px; }
+  .eeModBlockHead { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+  .eeModName { font-family:var(--mono); font-size:12px; color:var(--fg); }
+  .eeModBadge { font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:var(--accent);
+    border:1px solid #333c4c; border-radius:4px; padding:1px 6px; }
+  .eeModTn { font-size:10.5px; color:var(--dim); font-family:var(--mono); margin-left:auto; }
+  .eeModBlock .effOffsetRow input[type=text], .eeModBlock .effOffsetRow select { width:170px;
+    background:var(--bg); color:var(--fg); border:1px solid #333c4c; border-radius:4px; padding:2px 5px; font-size:11px; }
+  .eeCurveRow { display:flex; gap:8px; align-items:flex-start; margin:8px 0 4px; font-size:11.5px; }
+  .eeCurveRow label { width:120px; flex-shrink:0; color:var(--dim); font-family:var(--mono); padding-top:3px; }
+  .eeModBlock table.isptable input { width:70px; }
+
+  /* ---- custom dialog (replaces prompt/alert/confirm) ---- */
+  #eeOverlay { position:fixed; inset:0; background:rgba(6,8,11,.6); display:none;
+    align-items:center; justify-content:center; z-index:1000; }
+  #eeOverlay.show { display:flex; }
+  #eeDialog { background:var(--bg2); border:1px solid #333c4c; border-radius:8px;
+    min-width:340px; max-width:480px; padding:16px 18px; box-shadow:0 12px 44px rgba(0,0,0,.55); }
+  #eeDialog h3 { font-size:12.5px; color:var(--accent); margin-bottom:10px;
+    text-transform:uppercase; letter-spacing:.05em; }
+  #eeDialog .eeMsg { font-size:12px; color:var(--dim); margin-bottom:10px; line-height:1.4; }
+  #eeDialog input[type=text] { width:100%; padding:7px 10px; border-radius:6px;
+    border:1px solid #333c4c; background:var(--bg); color:var(--fg); margin-bottom:14px;
+    font-family:var(--mono); font-size:12.5px; outline:none; box-sizing:border-box; }
+  #eeDialog input[type=text]:focus { border-color:var(--accent); }
+  #eeDialog .eeList { max-height:280px; overflow-y:auto; margin-bottom:14px;
+    border:1px solid #333c4c; border-radius:6px; }
+  #eeDialog .eeList div { padding:7px 10px; cursor:pointer; font-size:12px;
+    font-family:var(--mono); border-bottom:1px solid #262c37; }
+  #eeDialog .eeList div:last-child { border-bottom:none; }
+  #eeDialog .eeList div:hover { background:var(--bg3); }
+  #eeDialog .eeList div.sel { background:var(--bg3); border-left:3px solid var(--accent); }
+  #eeDialog .eeBtns { display:flex; justify-content:flex-end; gap:8px; }
+</style>
+</head>
+<body>
+<div id="plApp">
+  <aside id="plList">
+    <header>
+      <h1 style="font-size:15px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);margin-bottom:8px;">Plume Library</h1>
+      <a href="index.html" style="color:var(--dim);font-size:12px;">&larr; Engine Editor</a>
+      <input id="plSearch" type="search" placeholder="Search templates…" autocomplete="off"
+        style="width:100%;margin-top:8px;padding:6px 10px;border-radius:6px;border:1px solid #333c4c;background:var(--bg);color:var(--fg);outline:none;">
+      <label style="display:flex;gap:6px;font-size:11px;color:var(--dim);margin-top:6px;">
+        <input type="checkbox" id="plAll"> show deprecated</label>
+      <button id="plNew" class="btn" style="width:100%;margin-top:8px;">＋ New plume</button>
+    </header>
+    <ul id="plUl"></ul>
+  </aside>
+  <main id="plMain">
+    <div id="plTop">
+      <h2 id="plTitle">Select a template</h2>
+      <span id="plMod" class="src"></span>
+      <span id="plReadonlyNote" class="src" style="display:none;color:var(--dim);">read-only (mod template)</span>
+      <button id="plCloneEdit" class="btn" style="display:none;">Clone to edit</button>
+      <button id="plAddEffect" class="btn" style="display:none;">＋ Add effect</button>
+      <button id="plRename" class="btn" style="display:none;">Rename</button>
+      <button id="plDelete" class="btn" style="display:none;">Delete</button>
+      <button id="plSave" class="btn" style="display:none;">Save</button>
+      <button id="plAssign" class="btn" style="display:none;">Assign to engine…</button>
+      <button id="plCompile" class="btn primary">Compile / Apply to GameData</button>
+      <button id="plExport" class="btn" style="margin-left:auto;">Export as TEMPLATE cfg</button>
+    </div>
+    <div id="plView">
+      <div id="plCanvasWrap"></div>
+      <div id="plErr"></div>
+    </div>
+    <div id="plControls">
+      <label>Throttle <input type="range" id="plThrottle" min="0" max="1" step="0.01" value="0.85">
+        <span id="plThrottleV">0.85</span></label>
+      <label>Atmosphere <input type="range" id="plAtmo" min="0" max="1" step="0.01" value="1">
+        <span id="plAtmoV">1.00</span></label>
+      <label>Bloom <input type="range" id="plBloom" min="0" max="2" step="0.02" value="0.6">
+        <span id="plBloomV">0.60</span></label>
+      <label>Exposure <input type="range" id="plExposure" min="0.1" max="4" step="0.02" value="1.4">
+        <span id="plExposureV">1.40</span></label>
+      <span class="src">drag to orbit · scroll to zoom</span>
+    </div>
+    <div id="plExportBox"><pre id="plExportText"></pre></div>
+    <div id="plAssignments" style="display:none;padding:8px 16px;border-bottom:1px solid #2c3340;background:var(--bg2);">
+      <div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--accent);margin-bottom:6px;">Engine assignments (this custom plume)</div>
+      <div id="plAssignList" style="font-size:12px;font-family:var(--mono);color:var(--dim);"></div>
+    </div>
+    <div id="plEffects"></div>
+  </main>
+</div>
+<div id="eeOverlay"><div id="eeDialog"></div></div>
+<datalist id="eeControllerList">
+  <option value="throttle"></option>
+  <option value="atmosphereDepth"></option>
+  <option value="random"></option>
+</datalist>
+<script src="plume.js?v=16"></script>
+<script src="plumelib.js?v=11"></script>
+</body>
+</html>

@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Engine Editor — Plume Suite Mockup</title>
+<style>
+:root{--bg:#14171c;--bg2:#1b1f26;--bg3:#232833;--fg:#d8dee9;--dim:#7a8494;--accent:#6ab0f3;
+--warn:#e5b567;--err:#e06c75;--ok:#98c379;--pur:#d3a7f0;--blue:#9ecbff;
+--mono:"Cascadia Code",Consolas,monospace}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--fg);font:13px/1.45 "Segoe UI",system-ui,sans-serif}
+#app{display:grid;grid-template-columns:230px 1fr 460px;height:100vh}
+/* catalog */
+#cat{background:var(--bg2);border-right:1px solid #2c3340;display:flex;flex-direction:column}
+#cat h1{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);padding:12px 14px 8px}
+#cat input{margin:0 12px 8px;padding:6px 9px;background:var(--bg);border:1px solid #333c4c;border-radius:6px;color:var(--fg)}
+.ci{padding:6px 14px;border-left:3px solid transparent;cursor:pointer}
+.ci.sel{background:var(--bg3);border-left-color:var(--accent)}
+.ci .t{font-weight:600}.ci .s{font-family:var(--mono);font-size:10px;color:var(--dim)}
+.chip{font-size:9px;padding:0 5px;border-radius:8px;background:#2c3340;margin-left:4px}
+.chip.wf{color:var(--blue)}.chip.b9{color:var(--pur)}
+/* config column */
+#cfg{overflow-y:auto;padding:16px 20px}
+#cfg h2{font-family:var(--mono);font-size:17px;color:var(--accent)}
+.src{color:var(--dim);font-size:11px;font-family:var(--mono);margin:2px 0 14px}
+.sec{margin-bottom:16px}
+.sec>h3{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:7px;
+display:flex;align-items:center;gap:8px}
+.sec>h3 .pill{font-size:9px;background:#2a3550;color:var(--blue);padding:1px 7px;border-radius:8px;text-transform:none;letter-spacing:0}
+.card{background:var(--bg2);border:1px solid #2c3340;border-radius:8px;padding:12px 14px}
+.row{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.row label{min-width:150px;color:var(--dim)}
+select,.inp{background:var(--bg);color:var(--fg);border:1px solid #333c4c;border-radius:5px;padding:4px 8px;font-family:var(--mono);font-size:12px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:7px 16px}
+.f{display:flex;flex-direction:column;gap:2px}.f label{font-size:11px;color:var(--dim)}
+.f .inp{width:100%}.f .inp.ed{border-color:var(--warn);background:#241f14}
+.fromsub{font-size:10px;color:var(--pur)}
+/* plume editor */
+.pe{border-color:#2a3a52}
+.petabs{display:flex;gap:4px;margin-bottom:10px;flex-wrap:wrap}
+.petab{font-size:11px;padding:4px 10px;border-radius:6px 6px 0 0;background:var(--bg3);cursor:pointer;border:1px solid #2c3340;border-bottom:none}
+.petab.on{background:#22304a;color:var(--blue)}
+.petab.add{background:transparent;color:var(--ok);border-style:dashed}
+.petab.def{color:var(--dim)}
+.namerow{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.namerow .inp{flex:1;color:var(--blue)}
+.forkbadge{font-size:9px;background:#2f2540;color:var(--pur);padding:2px 7px;border-radius:8px}
+.eff{border-top:1px solid #2c3340;padding-top:9px;margin-top:9px}
+.effhead{display:flex;align-items:center;gap:8px;margin-bottom:7px}
+.effhead .en{font-family:var(--mono);color:var(--pur)}
+.effhead .sh{font-size:10px;color:var(--dim)}
+.slider{display:flex;align-items:center;gap:8px}
+.slider input[type=range]{flex:1;accent-color:#e08a3c}
+.slider .v{font-family:var(--mono);font-size:11px;width:42px;text-align:right;color:var(--ok)}
+.sw{width:22px;height:14px;border-radius:3px;border:1px solid #444;display:inline-block;vertical-align:-2px}
+.gizhint{font-size:11px;color:var(--pur);margin-top:2px}
+.petools{display:flex;gap:8px;margin-top:12px}
+button{background:var(--accent);color:#0d1117;border:0;border-radius:6px;padding:6px 13px;font-weight:600;cursor:pointer;font-size:12px}
+button.g{background:transparent;color:var(--dim);border:1px solid #333c4c}
+button.ok{background:var(--ok);color:#0d1117}
+.note{font-size:11px;color:var(--dim);margin-top:8px;line-height:1.5}
+.caseB{background:#241f14;border:1px solid #4a3d22;border-radius:6px;padding:8px 11px;font-size:11.5px;color:var(--warn);margin-bottom:10px}
+/* viewer column */
+#view{background:var(--bg2);border-left:1px solid #2c3340;display:flex;flex-direction:column;padding:14px}
+.vbox{position:relative;height:340px;border-radius:8px;border:1px solid #2c3340;overflow:hidden;
+background:radial-gradient(120% 90% at 50% 20%,#2b3242 0%,#1c212c 55%,#12151c 100%)}
+.vdims{position:absolute;left:8px;top:8px;font:11px var(--mono);color:var(--dim);background:rgba(20,23,28,.6);padding:1px 6px;border-radius:5px}
+.vhint{position:absolute;left:8px;bottom:6px;font:11px var(--mono);color:var(--dim)}
+/* fake engine+plume svg */
+.vctrls{margin-top:12px}
+.vctrls .slider{margin-bottom:6px}.vctrls label{color:var(--dim);font-size:11px;min-width:66px;display:inline-block}
+.vchecks{display:flex;flex-wrap:wrap;gap:12px;margin-top:8px;font-size:11px;color:var(--dim)}
+.vchecks label{display:flex;align-items:center;gap:5px}
+/* manager modal */
+#mgr{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:20}
+#mgr.hide{display:none}
+.mbox{background:var(--bg2);border:1px solid #33415a;border-radius:10px;width:min(820px,92vw);max-height:86vh;display:flex;flex-direction:column;overflow:hidden}
+.mhead{padding:14px 18px;border-bottom:1px solid #2c3340;display:flex;align-items:center;gap:12px}
+.mhead h3{font-size:14px;color:var(--accent)}
+.mhead input{flex:1;background:var(--bg);border:1px solid #333c4c;border-radius:6px;padding:6px 10px;color:var(--fg)}
+.mlist{overflow-y:auto;padding:6px 0}
+.mrow{display:grid;grid-template-columns:1fr 70px 90px 130px;gap:10px;align-items:center;padding:8px 18px;border-bottom:1px solid #232833}
+.mrow:hover{background:var(--bg3)}
+.mrow .nm{font-family:var(--mono);font-size:12px}.mrow .nm.ee{color:var(--pur)}
+.mrow .meta{font-size:11px;color:var(--dim)}
+.mrow .ro{font-size:9px;color:var(--dim);border:1px solid #333c4c;border-radius:8px;padding:1px 6px}
+.mrow .ee{font-size:9px;color:var(--pur);border:1px solid #4a3a5c;border-radius:8px;padding:1px 6px}
+.opener{position:fixed;right:478px;top:14px;z-index:5}
+</style></head>
+<body>
+<div id="app">
+  <!-- catalog -->
+  <aside id="cat">
+    <h1>Engine Editor</h1>
+    <input placeholder="Search 985 engines…" value="f-1">
+    <div style="overflow-y:auto">
+      <div class="ci sel"><div class="t">F-1<span class="chip wf">WF</span><span class="chip b9">B9×2</span></div><div class="s">bluedog_Saturn_Engine_F1</div></div>
+      <div class="ci"><div class="t">F-1B<span class="chip wf">WF</span></div><div class="s">Bluedog_DB</div></div>
+      <div class="ci"><div class="t">RS-25 (SSME)<span class="chip wf">WF</span></div><div class="s">CryoEngines</div></div>
+      <div class="ci"><div class="t">Vesuvius<span class="chip wf">WF</span></div><div class="s">CryoEngines</div></div>
+    </div>
+  </aside>
+
+  <!-- config -->
+  <main id="cfg">
+    <h2>F-1</h2>
+    <div class="src">bluedog_Saturn_Engine_F1 · Bluedog_DB/Parts/Saturn/Engines/…</div>
+
+    <div class="sec"><h3>Part switches (B9PartSwitch)</h3>
+      <div class="card">
+        <div class="row"><label>Engine Config</label><select><option>F-1</option><option selected>F-1B</option><option>F-1CW</option></select><span class="fromsub">4 more variants</span></div>
+        <div class="row"><label>Insulation</label><select><option>Disabled</option><option>Enabled</option></select></div>
+      </div>
+    </div>
+
+    <div class="sec"><h3>Engine — BDBF1 <span style="color:var(--pur);font-size:10px">(showing F-1B subtype)</span></h3>
+      <div class="card"><div class="grid">
+        <div class="f"><label>Max thrust (kN)</label><input class="inp ed" value="2277"><span class="fromsub">from subtype: F-1B</span></div>
+        <div class="f"><label>Heat production</label><input class="inp" value="160"></div>
+      </div></div>
+    </div>
+
+    <!-- THE NEW PART -->
+    <div class="sec"><h3>Plume editor <span class="pill">EngineEditor Plume</span></h3>
+      <div class="card pe">
+        <div class="caseB"><b>Case B:</b> this engine already swaps its plume per engine-config subtype (BDB ships F-1 / F-1B / F-1CW plumes). Editing here overrides the <b>F-1B subtype's</b> plume in place — no separate switcher is added (that would be a B9PS conflict). Pick a subtype above to edit its plume.</div>
+
+        <div class="petabs">
+          <div class="petab def">Default (shipped)</div>
+          <div class="petab on">F-1B plume ✎</div>
+          <div class="petab add">＋ New plume variant</div>
+        </div>
+
+        <div class="namerow">
+          <span style="color:var(--dim)">Template</span>
+          <input class="inp" value="BDB_F1_ee7a3c">
+          <span class="forkbadge">forked from BDB_F1</span>
+        </div>
+
+        <div class="eff">
+          <div class="effhead"><span class="en">MainPlume</span><span class="sh">Waterfall/Additive (Dynamic)</span></div>
+          <div class="row"><label>Start tint</label><span class="sw" style="background:#ff8a3d"></span><input class="inp" style="width:120px" value="1, 0.54, 0.24, 1"></div>
+          <div class="row"><label>Brightness</label><div class="slider" style="flex:1"><input type="range" min="0" max="10" value="4.2"><span class="v">4.20</span></div></div>
+          <div class="row"><label>Falloff</label><div class="slider" style="flex:1"><input type="range" min="0" max="10" value="3"><span class="v">3.00</span></div></div>
+          <div class="row"><label>Noise</label><div class="slider" style="flex:1"><input type="range" min="0" max="15" value="0.8"><span class="v">0.80</span></div></div>
+        </div>
+
+        <div class="eff">
+          <div class="effhead"><span class="en">film</span><span class="sh">Waterfall/Alpha (Dynamic) · film cooling skirt</span></div>
+          <div class="row"><label>Intensity</label><div class="slider" style="flex:1"><input type="range" min="0" max="3" value="0.7"><span class="v">0.70</span></div></div>
+        </div>
+
+        <div class="eff">
+          <div class="effhead"><span class="en">Position / scale</span><span class="sh">whole-plume offset · drag in 3D →</span></div>
+          <div class="grid">
+            <div class="f"><label>Position X / Y / Z</label><input class="inp ed" value="0, 0, 0.03"></div>
+            <div class="f"><label>Scale (uniform)</label><input class="inp" value="4.17"></div>
+          </div>
+          <div class="gizhint">◆ drag the coloured arrows on the plume in the viewer to move it — updates this field live</div>
+        </div>
+
+        <div class="petools">
+          <button class="ok">Save → generate patch</button>
+          <button class="g">Preview diff</button>
+          <button class="g" onclick="document.getElementById('mgr').classList.remove('hide')">Manage all plumes…</button>
+        </div>
+        <div class="note">Save compiles <b>GameData/zzzz_EngineEditor/</b>: a new <code>EFFECTTEMPLATE</code> for the forked plume + a <code>:FINAL</code> patch overriding the F-1B subtype's TEMPLATE. Takes effect next KSP launch; the editor verifies it landed after reindex.</div>
+      </div>
+    </div>
+
+    <div class="sec"><h3>Warnings · full config (advanced)</h3>
+      <div class="card" style="color:var(--dim);font-size:11px">▸ 7 overwrite warnings &nbsp;·&nbsp; ▸ compiled config tree</div>
+    </div>
+  </main>
+
+  <!-- viewer -->
+  <aside id="view">
+    <div class="vbox">
+      <div class="vdims">H 5.64 m × Ø 3.71 m</div>
+      <svg width="100%" height="100%" viewBox="0 0 460 340" preserveAspectRatio="xMidYMid meet">
+        <defs>
+          <linearGradient id="pl" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#fff"/><stop offset=".25" stop-color="#ffd89a"/>
+            <stop offset=".6" stop-color="#ff8a3d" stop-opacity=".7"/><stop offset="1" stop-color="#ff5a1e" stop-opacity="0"/></linearGradient>
+          <radialGradient id="core" cx="50%" cy="18%" r="60%"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#ffb060" stop-opacity="0"/></radialGradient>
+        </defs>
+        <!-- grid -->
+        <g stroke="#2c3646" stroke-width="1" opacity=".5">
+          <line x1="60" y1="250" x2="400" y2="250"/><line x1="90" y1="235" x2="370" y2="290"/>
+          <line x1="230" y1="228" x2="230" y2="300"/><line x1="150" y1="232" x2="150" y2="296"/><line x1="310" y1="232" x2="310" y2="296"/>
+        </g>
+        <!-- engine bell -->
+        <path d="M200 70 L260 70 L285 150 L175 150 Z" fill="#3a3f47" stroke="#555"/>
+        <rect x="205" y="40" width="50" height="32" fill="#4a4f57" stroke="#555"/>
+        <!-- plume -->
+        <path d="M180 150 L280 150 L250 320 L210 320 Z" fill="url(#pl)"/>
+        <ellipse cx="230" cy="160" rx="46" ry="30" fill="url(#core)"/>
+        <!-- gizmo at throat -->
+        <g stroke-width="2.5" opacity=".95">
+          <line x1="230" y1="150" x2="230" y2="215" stroke="#5ac8fa"/><polygon points="230,222 226,212 234,212" fill="#5ac8fa"/>
+          <line x1="230" y1="150" x2="292" y2="150" stroke="#e0533f"/><polygon points="299,150 289,146 289,154" fill="#e0533f"/>
+          <line x1="230" y1="150" x2="230" y2="96" stroke="#8fd46a"/><polygon points="230,89 226,99 234,99" fill="#8fd46a"/>
+          <circle cx="230" cy="150" r="4" fill="#fff"/>
+        </g>
+        <text x="300" y="150" fill="#e0533f" font-size="11" font-family="monospace">X</text>
+        <text x="236" y="212" fill="#5ac8fa" font-size="11" font-family="monospace">Z ↕ drag</text>
+      </svg>
+      <div class="vhint">drag to rotate · wheel to zoom · drag arrows to move plume</div>
+    </div>
+    <div class="vctrls">
+      <div class="slider"><label>Throttle</label><input type="range" min="0" max="1" step=".01" value="1"><span class="v">1.00</span></div>
+      <div class="slider"><label>Atmosphere</label><input type="range" min="0" max="1" step=".01" value="0"><span class="v">0.00</span></div>
+      <div class="slider"><label>Heat</label><input type="range" min="0" max="1" step=".01" value="0.3"><span class="v">0.30</span></div>
+      <div class="vchecks">
+        <label><input type="checkbox" checked> Plume in view</label>
+        <label><input type="checkbox" checked> Axis gizmo</label>
+        <label><input type="checkbox" checked> All nozzles</label>
+        <label><input type="checkbox" checked> Grid</label>
+        <label><input type="checkbox"> Lock zoom</label>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<!-- Plume Manager modal -->
+<div id="mgr" class="hide">
+  <div class="mbox">
+    <div class="mhead"><h3>Plume Manager</h3><input placeholder="Search templates…"><button class="ok">＋ New plume</button><button class="g" onclick="document.getElementById('mgr').classList.add('hide')">Close</button></div>
+    <div class="mlist">
+      <div class="mrow"><span class="nm ee">BDB_F1_ee7a3c</span><span class="ee">EngineEditor</span><span class="meta">1 engine</span><span><button class="g" style="padding:3px 9px">Edit</button></span></div>
+      <div class="mrow"><span class="nm">BDB_F1_film</span><span class="ro">mod</span><span class="meta">used ×3</span><span><button class="g" style="padding:3px 9px">Clone to edit</button></span></div>
+      <div class="mrow"><span class="nm">waterfall-kerolox-lower-1</span><span class="ro">mod</span><span class="meta">used ×61</span><span><button class="g" style="padding:3px 9px">Clone to edit</button></span></div>
+      <div class="mrow"><span class="nm">waterfall-hydrolox-lower-4</span><span class="ro">mod</span><span class="meta">used ×18</span><span><button class="g" style="padding:3px 9px">Clone to edit</button></span></div>
+      <div class="mrow"><span class="nm" style="color:var(--err)">lemon-srb-2</span><span class="ro" style="color:var(--err);border-color:var(--err)">missing</span><span class="meta">broken ref</span><span><button class="g" style="padding:3px 9px">Inspect</button></span></div>
+    </div>
+  </div>
+</div>
+<div class="opener"><button class="g" onclick="document.getElementById('mgr').classList.remove('hide')">Open Plume Manager</button></div>
+</body></html>

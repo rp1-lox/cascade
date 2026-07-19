@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>KSP Engine Editor</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <header>
+      <h1>Engine Editor <a href="plumelib.html" style="float:right;font-size:11px;text-transform:none;letter-spacing:0;">Plume Library →</a></h1>
+      <input id="search" type="search" placeholder="Search engines…" autocomplete="off">
+      <div id="filters">
+        <select id="modFilter"><option value="">All mods</option></select>
+        <label><input type="checkbox" id="fWaterfall"> Waterfall</label>
+        <label><input type="checkbox" id="fSwitch"> Switches</label>
+        <label><input type="checkbox" id="fWarn"> ⚠</label>
+        <label><input type="checkbox" id="fShowDeprecated"> Show deprecated</label>
+      </div>
+    </header>
+    <ul id="partList"></ul>
+  </aside>
+  <main id="detail">
+    <div class="placeholder">Select an engine</div>
+  </main>
+  <div id="splitter" title="Drag to resize"></div>
+  <aside id="viewer">
+    <div class="viewer-placeholder">Select an engine to view its 3D model</div>
+  </aside>
+</div>
+<div id="changesBar" class="hidden">
+  <span id="changeCount"></span>
+  <button id="btnPreview">Preview patch</button>
+  <button id="btnDiscard" class="ghost">Discard</button>
+</div>
+<div id="modal" class="hidden">
+  <div id="modalBox">
+    <h3>Generated ModuleManager patch</h3>
+    <pre id="patchText"></pre>
+    <div class="row">
+      <input id="patchName" type="text" placeholder="filename (e.g. my-f1-tweaks)">
+      <button id="btnSave">Save to GameData/zzzz_EngineEditor/</button>
+      <button id="btnClose" class="ghost">Close</button>
+    </div>
+    <div id="saveMsg"></div>
+  </div>
+</div>
+<script src="model3d.js?v=11"></script>
+<script src="plume.js?v=16"></script>
+<script src="app.js?v=21"></script>
+</body>
+</html>

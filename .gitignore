@@ -1,0 +1,27 @@
+# --- Cascade ---
+
+# Per-install index — rebuilt on each machine from its ModuleManager cache.
+# Keep only the curated starter templates that ship with the tool.
+data/*
+!data/starter_templates.json
+
+# Bundled runtime interpreter — shipped in the release zip, not tracked as source.
+python/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Built distributables
+*.zip
+
+# Dev logs / scratch output
+*.log
+*.err.txt
+*.out.txt
+
+# OS cruft
+.DS_Store
+Thumbs.db
+desktop.ini

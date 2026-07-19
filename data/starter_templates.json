@@ -1,0 +1,149 @@
+{
+  "description": "Curated shortlist of exemplary, battle-tested Waterfall EFFECTTEMPLATEs to offer as a starting point when a user creates a new plume in EngineEditor. Selected from the installed GameData by usageCount (how many installed engine .cfgs reference the template) and manual review of layering/controller/color quality. All templateName values verified to resolve via GET /api/template in this install. RealPlume is out of scope.",
+  "templates": [
+    {
+      "key": "kerolox_lower",
+      "templateName": "waterfall-kerolox-lower-4",
+      "providedBy": "Waterfall",
+      "propellant": "kerolox",
+      "role": "lower/sea-level",
+      "whyGood": "Reference 13-effect kerolox skeleton (core/mid/vac triple-layer body, 3-segment shock stack, wisp, bone-rigged inner glow, distortion, light) with textbook throttle+atmosphereDepth curve shaping.",
+      "usageCount": 10
+    },
+    {
+      "key": "kerolox_upper_vac",
+      "templateName": "waterfall-kerolox-upper-3",
+      "providedBy": "Waterfall",
+      "propellant": "kerolox",
+      "role": "upper/vacuum",
+      "whyGood": "Same author lineage as waterfall-kerolox-lower-4, tuned for vacuum operation (longer plume, no shock stack, higher usageCount in this install).",
+      "usageCount": 23
+    },
+    {
+      "key": "kerolox_generic_core",
+      "templateName": "stock-kerolox-generator",
+      "providedBy": "StockWaterfallEffects / NCAP",
+      "propellant": "kerolox",
+      "role": "generic/simple",
+      "whyGood": "Minimal 2-effect kerolox plume (flame + bone-rigged Core) - good lightweight starter for engines that don't need the full multi-layer treatment.",
+      "usageCount": 12
+    },
+    {
+      "key": "hydrolox_lower",
+      "templateName": "waterfall-hydrolox-lower-4",
+      "providedBy": "Waterfall",
+      "propellant": "hydrolox",
+      "role": "lower/sea-level",
+      "whyGood": "Highest-usage hydrolox template in the install; demonstrates the near-invisible-plume convention (low brightness, high _Fresnel rim glow) plus a dedicated shock-diamond mesh (fx-simple-shock-1) and Cherenkov-style engine light color curve.",
+      "usageCount": 28
+    },
+    {
+      "key": "hydrolox_upper_vac",
+      "templateName": "waterfall-hydrolox-upper-1",
+      "providedBy": "Waterfall",
+      "propellant": "hydrolox",
+      "role": "upper/vacuum",
+      "whyGood": "Vacuum-tuned hydrolox counterpart; wide/faint plume2 layers with high _Fresnel (up to 7) to keep the plume readable when almost fully additive-transparent.",
+      "usageCount": 13
+    },
+    {
+      "key": "methalox_lower",
+      "templateName": "waterfall-methalox-lower-BE4-1",
+      "providedBy": "Waterfall",
+      "propellant": "methalox",
+      "role": "lower/sea-level (BE-4 style)",
+      "whyGood": "Full multi-layer methalox plume with the characteristic purple/violet outer-plume tint over a white-hot orange core; includes throttle/end-flame/distort/light layers matching the kerolox skeleton for easy comparison.",
+      "usageCount": 6
+    },
+    {
+      "key": "methalox_upper",
+      "templateName": "waterfall-methalox-upper-1",
+      "providedBy": "Waterfall",
+      "propellant": "methalox",
+      "role": "upper/vacuum",
+      "whyGood": "Highest-usage methalox template; vacuum-tuned violet/magenta plume with paired shock and inner-glow layers.",
+      "usageCount": 9
+    },
+    {
+      "key": "hypergolic_upper",
+      "templateName": "waterfall-hypergolic-white-upper-1",
+      "providedBy": "Waterfall",
+      "propellant": "hypergolic",
+      "role": "upper/vacuum",
+      "whyGood": "Most-used hypergolic template in the install by a wide margin; pink-core-to-pale-blue-envelope look plus a distinct violet coreBlue accent layer characteristic of NTO/UDMH propellants.",
+      "usageCount": 42
+    },
+    {
+      "key": "hypergolic_aerozine50",
+      "templateName": "waterfall-hypergolic-aerozine50-upper-1",
+      "providedBy": "Waterfall",
+      "propellant": "hypergolic",
+      "role": "upper/vacuum (Aerozine-50 variant)",
+      "whyGood": "Second-most-used hypergolic template; deeper orange-red tint variant for storable-oxidizer engines, good alternate starter alongside the white-upper template.",
+      "usageCount": 20
+    },
+    {
+      "key": "solid_srb",
+      "templateName": "srb-waterfall",
+      "providedBy": "RSMP",
+      "propellant": "solid",
+      "role": "SRB (full burn + burnout)",
+      "whyGood": "By far the single most-referenced template in this entire install; full ignition-flash (alpha-animated core), tan-smoke main plume, and a complete 6-effect burnout/sparkout sequence (sparkout, sparkout2, trickleout, Fireball, smokeout, smokeout2) - the reference solid-motor starter.",
+      "usageCount": 106
+    },
+    {
+      "key": "solid_srb_upper",
+      "templateName": "BDB_SRM_upper",
+      "providedBy": "Bluedog_DB",
+      "propellant": "solid",
+      "role": "SRB (upper stage / vacuum)",
+      "whyGood": "Second-most-used solid template overall; simpler 5-effect structure with distinct core/plumeOuter/nozzleExit/lowThrust layers, white-to-orange gradient tuned for vacuum/upper-stage solids.",
+      "usageCount": 26
+    },
+    {
+      "key": "ion_gridded_xenon",
+      "templateName": "template-nfp-ion-gridded-xenon-1",
+      "providedBy": "NearFuturePropulsion",
+      "propellant": "ion/xenon",
+      "role": "electric propulsion",
+      "whyGood": "Clean, minimal ion-thruster template (single griddedPlume1 effect + light) with the saturated blue-violet signature typical of gridded ion engines; good compact starter to layer additional detail onto.",
+      "usageCount": 3
+    },
+    {
+      "key": "ion_stock_xenon",
+      "templateName": "stock-xenon-ion",
+      "providedBy": "StockWaterfallEffects / NCAP",
+      "propellant": "ion/xenon",
+      "role": "electric propulsion (multi-ring)",
+      "whyGood": "Demonstrates the concentric-ring ion-plume technique (centerSource/sourceFlame/coreFlame/ringSource/ringFlame/ringInside) rather than a single cone - a distinct layering pattern worth offering alongside the simpler gridded-xenon template.",
+      "usageCount": 3
+    },
+    {
+      "key": "ntr_lh2",
+      "templateName": "waterfall-ka-ntr-lh2-1",
+      "providedBy": "KerbalAtomics",
+      "propellant": "ntr (LH2)",
+      "role": "nuclear thermal rocket",
+      "whyGood": "Reference NTR template: hydrolox-adjacent pale plume plus a distinct pink/magenta 'plume-core' and rimglow layer that reads as the reactor-heated core - the diagnostic NTR look absent from chemical-engine templates.",
+      "usageCount": 4
+    },
+    {
+      "key": "ntr_cherenkov",
+      "templateName": "BDB_nuclear_vac",
+      "providedBy": "Bluedog_DB",
+      "propellant": "ntr (LH2)",
+      "role": "nuclear thermal rocket (vacuum)",
+      "whyGood": "Adds a dedicated cherenkov glow effect (blue-violet, low-alpha, additive) on top of the standard NTR plume/shock layers - worth using whenever a mission wants the 'reactor glow' look explicitly called out.",
+      "usageCount": 5
+    },
+    {
+      "key": "generic_nozzle_glow_orange",
+      "templateName": "waterfall-nozzle-glow-orange-1",
+      "providedBy": "Waterfall",
+      "propellant": "generic",
+      "role": "nozzle metal-glow add-on",
+      "whyGood": "Minimal single-effect propellant-agnostic hot-metal nozzle ring, meant to be layered onto any plume template rather than used standalone; orange variant of a 4-color family (orange/blue/white/yellow) that share one mesh/scale/curve pattern.",
+      "usageCount": 13
+    }
+  ]
+}
