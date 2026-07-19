@@ -1,4 +1,5 @@
 # Normalize line endings. Shell scripts MUST stay LF so run.sh works on Linux/macOS.
 * text=auto
 *.sh text eol=lf
+*.command text eol=lf
 *.bat text eol=crlf
