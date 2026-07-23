@@ -11,10 +11,10 @@ let ENGINES = [], SELECTED = null, PART = null, EDITS = new Map(), SUBSEL = {};
 // collapsible section in the scrolling config flow.
 let MODEL_BOX = null, MODEL_BOX_PART = null, MODEL_SHOW_SHROUD = false;
 let MODEL_GLOW = 0;
-let MODEL_GRID_ON = true, MODEL_LOCK_ZOOM = false;
+let MODEL_GRID_ON = false, MODEL_LOCK_ZOOM = false;
 let MODEL_DEPLOYED = true;   // deployable-nozzle pose: default ON (firing state)
 // Waterfall plume-in-viewer state
-let WF_CTRL = { throttle: 1, atmo: 0, gizmo: false, show: true, allNozzles: true, eventT: 0 };
+let WF_CTRL = { throttle: 1, atmo: 1, gizmo: false, show: true, allNozzles: true, eventT: 0 };
 let WF_OVERLAYS = [];      // [{ov, t, baseMatrix, cb, isPrimaryGizmo}]
 let WF_UPDATE_SEQ = 0;
 // TEMPLATE position field's <input> DOM element, keyed by its editPath (t.editBase +
@@ -53,6 +53,66 @@ async function ensureModelTransforms() {
   } catch (e) { MODEL_TREE_CACHE = new Map(); }
   MODEL_TREE_PART = SELECTED;
   return MODEL_TREE_CACHE;
+}
+
+// §10.2 — transform-name → occurrence-count map (ORIGINAL case, unlike MODEL_TREE_CACHE which
+// lowercases) for the attach-transform picker's `name (×N)` annotations and the default-attach
+// heuristic. Cached per part; independent /api/model walk preserving each node's original name.
+let MODEL_TFCOUNT_CACHE = null, MODEL_TFCOUNT_PART = null;
+async function ensureTransformCounts() {
+  if (MODEL_TFCOUNT_PART === SELECTED && MODEL_TFCOUNT_CACHE) return MODEL_TFCOUNT_CACHE;
+  const counts = new Map();
+  try {
+    const data = await (await fetch('/api/model?part=' + encodeURIComponent(SELECTED))).json();
+    const walk = obj => {
+      const nm = (obj && obj.name || '').trim();
+      if (nm) counts.set(nm, (counts.get(nm) || 0) + 1);
+      for (const c of (obj && obj.children || [])) walk(c);
+    };
+    for (const m of (data.models || [])) if (m.tree) walk(m.tree);
+  } catch (e) {}
+  MODEL_TFCOUNT_CACHE = counts; MODEL_TFCOUNT_PART = SELECTED;
+  return counts;
+}
+
+// §10.1/§10.2 — default attach transform for a minted plume: 'thrustTransform' if present, else
+// the most frequent name containing thrust/nozzle, else the most frequent transform overall.
+function defaultAttachTransform(counts) {
+  if (!counts || !counts.size) return 'thrustTransform';
+  if (counts.has('thrustTransform')) return 'thrustTransform';
+  let best = null, bestN = -1;
+  for (const [nm, n] of counts) if (/thrust|nozzle/i.test(nm) && n > bestN) { best = nm; bestN = n; }
+  if (best) return best;
+  for (const [nm, n] of counts) if (n > bestN) { best = nm; bestN = n; }
+  return best || 'thrustTransform';
+}
+
+// Populate a <datalist> with `name (×N)` transform options (value = bare name; label shows count).
+async function fillTransformDatalist(datalist) {
+  const counts = await ensureTransformCounts();
+  datalist.textContent = '';
+  for (const [nm, n] of [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))) {
+    const o = el('option'); o.value = nm; o.label = nm + ' (×' + n + ')'; datalist.appendChild(o);
+  }
+}
+
+// §10.2 (dropdown form): populate a <select> with the part's transform names as
+// `name (×N)` options. Preserves the select's current/desired value: if it isn't in the
+// model's transform list (template default '' or a hand-written name), an extra option is
+// kept for it so nothing is silently rewritten.
+async function fillTransformSelect(sel) {
+  const want = sel.value;
+  const counts = await ensureTransformCounts();
+  sel.textContent = '';
+  const blank = el('option', null, '(template default)'); blank.value = '';
+  sel.appendChild(blank);
+  for (const [nm, n] of [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))) {
+    const o = el('option', null, nm + ' (×' + n + ')'); o.value = nm; sel.appendChild(o);
+  }
+  if (want && ![...sel.options].some(o => o.value === want)) {
+    const o = el('option', null, want + ' (custom)'); o.value = want; sel.appendChild(o);
+  }
+  sel.value = want;
 }
 
 // Push a rescaleFactor override (or null to clear) to both the mesh viewer and the
@@ -101,8 +161,40 @@ async function init() {
   });
   $('#btnClose').addEventListener('click', () => $('#modal').classList.add('hidden'));
   $('#btnSave').addEventListener('click', savePatch);
+  const compileBtn = $('#btnCompile');
+  if (compileBtn) compileBtn.addEventListener('click', runCompile);
   initSplitter();
   renderList();
+}
+
+// §9.4 — "Compile / Apply to GameData" in the header (the Manager's only non-view function,
+// folded in here since it had nothing else). Calls the same /api/plume/compile endpoint the
+// standalone Manager used; lint/result output is shown in-page (custom UI, no dialogs).
+async function runCompile() {
+  const out = $('#compileOut'), btn = $('#btnCompile');
+  if (!out) return;
+  out.classList.remove('hidden');
+  out.classList.remove('err');
+  out.textContent = 'Compiling…';
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch('/api/plume/compile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const r = await res.json();
+    if (r.ok === false || r.error) {
+      out.classList.add('err');
+      const errs = r.errors || (r.error ? [r.error] : ['unknown error']);
+      out.textContent = 'Compile refused:\n' + errs.map(e => '  • ' + (typeof e === 'string' ? e : JSON.stringify(e))).join('\n');
+    } else {
+      const files = r.files || r.written || [];
+      out.textContent = 'Compiled ✓' + (files.length ? ' — wrote:\n' + files.map(f => '  • ' + f).join('\n')
+        : ' — ' + JSON.stringify(r));
+    }
+  } catch (ex) {
+    out.classList.add('err');
+    out.textContent = 'Compile failed: ' + (ex.message || ex);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 // Draggable vertical gutter between the config column (#detail) and the 3D viewer
@@ -189,7 +281,7 @@ function renderList() {
 
 async function select(name, li) {
   if (EDITS.size && name !== SELECTED &&
-      !confirm('Discard unsaved edits?')) return;
+      !(await openDialog({ title: 'Discard unsaved edits?', okText: 'Discard' }))) return;
   EDITS.clear(); SUBSEL = {};
   setLiveRescaleOverride(null);
   SELECTED = name;
@@ -288,8 +380,9 @@ function renderDetail(d) {
 
   renderVariants(root);
   renderPart(root);
-  renderEngines(root);
-  renderWaterfall(root);
+  // §9.1: the old standalone "Engines" and "Waterfall" sections no longer render here —
+  // their functionality now lives inside the variant panel's Engine/Plume sub-tabs (see
+  // buildVariantReadonly()/buildVariantForm(), called from renderVariants() above).
   renderWarnings(root, d);
   renderTree(root, d);
 }
@@ -369,8 +462,18 @@ function renderViewer() {
   }
   controls.appendChild(ctrl);
 
-  if (waterfallModules().length) controls.appendChild(wfControlBar());
+  if (waterfallModules().length || (VARIANT_PREVIEW && VARIANT_PREVIEW.part === SELECTED))
+    controls.appendChild(wfControlBar());
   root.appendChild(controls);
+}
+
+// §10.1: on a part with no ModuleWaterfallFX the control bar (throttle/atmo/all-nozzles/
+// gizmo) is absent — the moment a variant plume preview goes live it must appear without
+// waiting for a full refresh().
+function ensureWfControlBar() {
+  if (document.querySelector('.wfctlbar')) return;
+  const controls = document.querySelector('.viewer-controls');
+  if (controls) controls.appendChild(wfControlBar());
 }
 
 // Force the 3D viewer to re-fetch/rebuild from scratch (used after an edit that
@@ -534,7 +637,14 @@ function renderSwitchers(root, excludeIds) {
       sel.appendChild(o);
     });
     sel.value = SUBSEL[b9id] ?? 0;
-    sel.addEventListener('change', () => { SUBSEL[b9id] = +sel.value; refresh(); });
+    sel.addEventListener('change', () => {
+      SUBSEL[b9id] = +sel.value;
+      // While a variant draft/edit form is open, a mesh/paint switch must NOT rebuild the
+      // whole panel — refresh() reconstructs the form and silently wipes unsaved edits.
+      // Update only the 3D view (mesh visibility + plume attach filtering).
+      if (VARIANT_UI && VARIANT_UI.mode === 'add') { updateModelVisibility(); updatePlumes(); }
+      else refresh();
+    });
     row.appendChild(sel);
     const st = subs[SUBSEL[b9id] ?? 0];
     if (st) {
@@ -806,13 +916,11 @@ function deployAnimInfo() {
   return uniq.length ? { animNames: uniq } : null;
 }
 
-/* ---------------- Waterfall plume: fork-on-edit ("Customize this plume") ----------------
- * docs/PlumeEditorDesign.md §3, §5e/§5f. Forks the currently-effective template for this
- * module + the current SUBSEL subtype into a new EngineEditor-owned custom template, wires
- * an engine assignment (Case A: fresh B9PS switcher variant; Case B: edits the existing
- * plume-switching B9PS in place — never adds a parallel switcher, that's a fatal B9PS
- * aspect-lock error per the design doc), then opens the full editor on the fork. Status is
- * reported via a plain in-page element — no window.alert/confirm/prompt (see memory). */
+/* ---------------- Waterfall plume: name helpers ----------------
+ * docs/PlumeEditorDesign.md §9.3: forking now happens silently inline, via
+ * forkPlumeTemplate()/mountPlumeEditable() below (POST /api/plume/fork, server-deduped) —
+ * there is no separate "Customize this plume" flow or Case A/B engine-assignment step here
+ * any more; the fork simply becomes the variant/subtype's template field. */
 
 function slugifyPlumeName(s) {
   return String(s).replace(/[^A-Za-z0-9_-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
@@ -825,93 +933,6 @@ async function uniquePlumeName(base) {
   for (let i = 2; ; i++) {
     const cand = `${base}-${i}`;
     if (!taken.has(cand)) return cand;
-  }
-}
-
-function wfForkStatus(sec, msg, isError) {
-  let box = sec.querySelector('.forkstatus');
-  if (!box) {
-    box = el('div', 'forkstatus');
-    sec.appendChild(box);
-  }
-  box.classList.toggle('err', !!isError);
-  box.textContent = msg;
-}
-
-async function customizePlume(sec, wf, t, sourceTemplate) {
-  wfForkStatus(sec, 'Forking ' + sourceTemplate + ' …', false);
-  try {
-    const info = await (await fetch('/api/plume/engine-info?part=' + encodeURIComponent(PART.name))).json();
-    if (info.error) throw new Error(info.error);
-    if (info.case === 'none') throw new Error('this part has no Waterfall plume to customize');
-
-    const newName = await uniquePlumeName(slugifyPlumeName(sourceTemplate + '-' + PART.name));
-    let r = await (await fetch('/api/plume/clone', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source: sourceTemplate, newName }),
-    })).json();
-    if (r.error) throw new Error(r.error);
-
-    const attach = {
-      overrideParentTransform: wfCurVal(t, 'overrideParentTransform', ''),
-      position: wfCurVal(t, 'position', '0,0,0'),
-      rotation: wfCurVal(t, 'rotation', '0,0,0'),
-      scale: wfCurVal(t, 'scale', '1,1,1'),
-    };
-
-    let note = '';
-    if (info.case === 'A') {
-      const wfModuleID = keyOf(wf, 'moduleID') || (info.wfModules[0] && info.wfModules[0].moduleID) || '';
-      r = await (await fetch('/api/plume/assign', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ part: PART.name, wfModuleID,
-          variant: Object.assign({ name: 'Custom', template: newName }, attach) }),
-      })).json();
-      if (r.error) throw new Error(r.error);
-      note = ' (Case A: new "Custom" plume variant)';
-    } else if (info.case === 'B') {
-      const cb = info.caseB || {};
-      const b9id = cb.b9ModuleID || '';
-      let subName = null, hasOverride = false;
-      const b9 = b9Modules().find(m => (keyOf(m, 'moduleID') || '') === b9id);
-      if (b9) {
-        const subs = children(b9, 'SUBTYPE');
-        const st = subs[SUBSEL[b9id] ?? 0];
-        if (st) subName = keyOf(st, 'name') || null;
-      }
-      if (subName) {
-        const detail = (cb.subtypes || []).find(s => s.name === subName);
-        hasOverride = !!(detail && detail.hasOverride);
-      }
-      let op, payload;
-      if (subName && hasOverride) {
-        op = 'subtype';
-        payload = Object.assign({ subtype: subName, template: newName }, attach);
-        note = ' (Case B: retextured subtype "' + subName + '")';
-      } else {
-        // Ambiguous (no override on the current subtype, so it currently falls through to
-        // the base plume) or subtype unknown — default to editing the shared base plume, and
-        // say so explicitly rather than silently guessing per-subtype.
-        op = 'base';
-        payload = Object.assign({ template: newName }, attach);
-        note = subName
-          ? ' (Case B: subtype "' + subName + '" has no override — edited the shared base plume instead; other non-overriding subtypes are affected too)'
-          : ' (Case B: edited the shared base plume)';
-      }
-      r = await (await fetch('/api/plume/assign-b', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ part: PART.name, b9ModuleID: b9id, wfModuleID: cb.wfModuleID || '', op, payload }),
-      })).json();
-      if (r.error) throw new Error(r.error);
-    } else {
-      throw new Error('unexpected case ' + info.case);
-    }
-
-    wfForkStatus(sec, 'Forked ' + sourceTemplate + ' → ' + newName + ', assigned to this engine' +
-      note + '. Opening editor… Remember to Compile in the Manager to apply.', false);
-    window.open('plumelib.html?template=' + encodeURIComponent(newName), '_blank');
-  } catch (ex) {
-    wfForkStatus(sec, 'Customize failed: ' + (ex.message || ex), true);
   }
 }
 
@@ -1043,7 +1064,16 @@ async function updatePlumes() {
   const transformsByName = await ensureModelTransforms();
   if (seq !== WF_UPDATE_SEQ) return;                       // superseded by a newer update
   WF_EVENT_INFO = { ignition: null, flameout: null };
-  for (const { wf, parents } of waterfallModules()) {
+  // §10.1: parts with NO ModuleWaterfallFX still need a live plume preview when the user is
+  // authoring a variant plume (we mint an eeWaterfall at compile time). Synthesize a module so
+  // the VARIANT_PREVIEW branch below renders the chosen template on the model's thrust transforms.
+  let wfEntries = waterfallModules();
+  if (!wfEntries.length && VARIANT_PREVIEW && VARIANT_PREVIEW.part === SELECTED && VARIANT_PREVIEW.template) {
+    wfEntries = [{ wf: { h: 'MODULE', c: [],
+      k: [['name', 'ModuleWaterfallFX'], ['moduleID', VARIANT_PREVIEW.wfModuleID || 'eeWaterfall']] },
+      parents: [PART.node] }];
+  }
+  for (const { wf, parents } of wfEntries) {
     // ENGINE EVENT CONTROLLER: CONTROLLER{linkedTo=engineEvent}/ENGINEEVENTCONTROLLER
     // nodes live directly on the ModuleWaterfallFX module (not inside a TEMPLATE), per
     // docs/WaterfallTemplatePatterns.md sec.5 (Avalanche's one-shot ignition/flameout
@@ -1427,11 +1457,12 @@ function renderWaterfall(root) {
         });
         box.appendChild(btn);
 
-        const custBtn = el('button', 'ghost', 'Customize this plume →');
-        custBtn.style.marginTop = '6px';
-        custBtn.style.marginLeft = '6px';
-        custBtn.addEventListener('click', () => customizePlume(sec, wf, t, tn));
-        box.appendChild(custBtn);
+        // §9.1/§9.2: shipped subtypes get the FULL inline PlumeEdit editor, expanded in
+        // place, but read-only (no fork-on-edit here — see §9.3; forking only happens for
+        // EE-added variants, wired in buildVariantForm()'s Plume sub-tab).
+        const inlineHost = el('div', 'plumeInlineWrap');
+        box.appendChild(inlineHost);
+        mountPlumeReadonly(inlineHost, tn);
       }
       sec.appendChild(box);
     }
@@ -1475,12 +1506,11 @@ function previewVariant(info, v) {
 }
 
 // ============================================================================
-// §10 Inline plume editor drawer — mounts the shared PlumeEdit module on a
-// variant's plume, with the engine's 3D viewer as the live on-engine preview.
+// §9.2 Inline plume editor — mounts the shared PlumeEdit module directly inside the
+// variant panel's Plume sub-tab (no overlay/drawer), with the engine's 3D viewer as the
+// live on-engine preview (see mountPlumeReadonly()/mountPlumeEditable() below).
 // ============================================================================
-let PLUME_DRAWER = null;      // { template, ctx, tree, attach, wfModuleID, editable, dirty }
 let SHADER_PARAMS = null;
-let _drawerWired = false;
 
 async function ensureShaderParams() {
   if (SHADER_PARAMS) return SHADER_PARAMS;
@@ -1520,67 +1550,112 @@ function openDialog(opts) {
   });
 }
 
-function drawerStatus(msg, err) { const s = $('#plumeDrawerStatus'); if (s) { s.textContent = msg || ''; s.classList.toggle('err', !!err); } }
-
-function setDrawerPreview() {
-  if (!PLUME_DRAWER || !PART) return;
-  VARIANT_PREVIEW = { part: SELECTED, wfModuleID: PLUME_DRAWER.wfModuleID || '',
-    template: PLUME_DRAWER.template, attach: PLUME_DRAWER.attach, inlineTree: PLUME_DRAWER.tree };
-  updatePlumes();
-}
-
-// Open the drawer on a plume template, editing it live against the current engine's viewer.
-async function openPlumeDrawer(templateName, attach, wfModuleID) {
-  wireDrawerOnce();
-  drawerStatus('Loading ' + templateName + '…');
-  $('#plumeDrawer').classList.remove('hidden');
+// Read-only inline PlumeEdit view for a SHIPPED subtype's plume (§9.1/§9.3): full effect
+// accordion, but editable:false — no controls fire, so there is never a fork here.
+async function mountPlumeReadonly(host, templateName) {
+  host.textContent = '';
+  if (!templateName) { host.appendChild(el('div', 'wfnote', 'No plume template.')); return; }
+  const status = el('div', 'forkstatus', 'Loading ' + templateName + '…');
+  host.appendChild(status);
   let data;
   try { data = await (await fetch('/api/plume/get?name=' + encodeURIComponent(templateName))).json(); }
-  catch (e) { drawerStatus('Load failed: ' + e, true); return; }
-  if (!data || data.error) { drawerStatus('Load failed: ' + ((data && data.error) || 'unknown'), true); return; }
-  const editable = data.source === 'custom';
+  catch (e) { status.textContent = 'Load failed: ' + e; status.classList.add('err'); return; }
+  if (!data || data.error) { status.textContent = 'Load failed: ' + ((data && data.error) || 'unknown'); status.classList.add('err'); return; }
+  status.remove();
+  const head = el('div', 'plumeInlineHead');
+  head.appendChild(el('span', 'ptpl', templateName));
+  head.appendChild(el('span', 'srcbadge ' + data.source, data.source));
+  host.appendChild(head);
+  const rb = el('div', 'robanner');
+  rb.appendChild(el('span', 'lockchar', '\u{1F512}'));
+  rb.appendChild(document.createTextNode(
+    ' Shipped subtype — read-only. Click “+ New variant” above to customize this plume (it forks automatically when you edit).'));
+  host.appendChild(rb);
   const params = await ensureShaderParams();
-  const tree = data.node;
-  const ctx = { tree, editable, params, openIdx: new Set(), openDialog,
-    onChange: () => { if (PLUME_DRAWER) { PLUME_DRAWER.dirty = true; setDrawerPreview(); } } };
-  PLUME_DRAWER = { template: templateName, ctx, tree, attach: attach || {}, wfModuleID: wfModuleID || '', editable, dirty: false };
-  $('#plumeDrawerTitle').textContent = 'Plume: ' + templateName;
-  $('#plumeDrawerSub').textContent = editable ? '(custom — editable)' : '(mod template — read-only preview; fork it to edit)';
-  $('#plumeDrawerAdd').style.display = editable ? '' : 'none';
-  $('#plumeDrawerSave').style.display = editable ? '' : 'none';
-  drawerStatus('');
-  window.PlumeEdit.mount($('#plumeDrawerBody'), ctx);
-  setDrawerPreview();
+  const body = el('div', 'plumeInlineBody');
+  host.appendChild(body);
+  window.PlumeEdit.mount(body, { tree: data.node, editable: false, params, openIdx: new Set(), openDialog, onChange: () => {} });
 }
 
-function closePlumeDrawer() {
-  const d = $('#plumeDrawer'); if (d) d.classList.add('hidden');
-  PLUME_DRAWER = null; VARIANT_PREVIEW = null;
-  if (window.ModelViewer) updatePlumes();
-}
+// §9.2/§9.3 — the FULL PlumeEdit editor, editable, expanded in place for an EE-added
+// variant's plume. §9.3 silent auto-fork: the first control edit while the template is
+// mod/inherited forks it (POST /api/plume/fork, deduped name), updates the header name +
+// a `customized` badge, and calls onAssign(newName) so the host can silently update the
+// variant's stored template field — no status text, no dialogs. Already-custom templates
+// never re-fork. Edits persist to the fork via a debounced /api/plume/save, and drive the
+// live on-engine preview through the existing inlineTree path (VARIANT_PREVIEW/updatePlumes).
+async function mountPlumeEditable(host, templateName, wfModuleID, forkNameBase, onAssign, getAttach) {
+  host.textContent = '';
+  if (!templateName) {
+    host.appendChild(el('div', 'wfnote', 'Pick or create a plume template above to edit it here.'));
+    return;
+  }
+  const status = el('div', 'forkstatus', 'Loading ' + templateName + '…');
+  host.appendChild(status);
+  let data;
+  try { data = await (await fetch('/api/plume/get?name=' + encodeURIComponent(templateName))).json(); }
+  catch (e) { status.textContent = 'Load failed: ' + e; status.classList.add('err'); return; }
+  if (!data || data.error) { status.textContent = 'Load failed: ' + ((data && data.error) || 'unknown'); status.classList.add('err'); return; }
+  status.remove();
 
-async function saveDrawerPlume() {
-  if (!PLUME_DRAWER || !PLUME_DRAWER.editable) return;
-  drawerStatus('Saving…');
-  try {
-    const r = await (await fetch('/api/plume/save', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: PLUME_DRAWER.template, tree: PLUME_DRAWER.tree }) })).json();
-    if (r.error) throw new Error(r.error);
-    PLUME_DRAWER.dirty = false;
-    drawerStatus('Saved ✓ — Compile in the Plume Manager to apply in-game.');
-  } catch (ex) { drawerStatus('Save failed: ' + (ex.message || ex), true); }
-}
+  let curName = templateName, forked = data.source === 'custom', forking = false;
+  const head = el('div', 'plumeInlineHead');
+  const nameSpan = el('span', 'ptpl', curName);
+  const badge = el('span', 'srcbadge ' + (forked ? 'customized' : data.source), forked ? 'customized' : data.source);
+  head.appendChild(nameSpan); head.appendChild(badge);
+  host.appendChild(head);
+  const params = await ensureShaderParams();
+  const body = el('div', 'plumeInlineBody');
+  host.appendChild(body);
 
-function wireDrawerOnce() {
-  if (_drawerWired) return; _drawerWired = true;
-  $('#plumeDrawerAdd').addEventListener('click', () => { if (PLUME_DRAWER) window.PlumeEdit.addEffect(PLUME_DRAWER.ctx); });
-  $('#plumeDrawerSave').addEventListener('click', saveDrawerPlume);
-  $('#plumeDrawerClose').addEventListener('click', closePlumeDrawer);
-  const rz = $('#plumeDrawerResize'), dr = $('#plumeDrawer');
-  let dragging = false;
-  rz.addEventListener('mousedown', e => { dragging = true; e.preventDefault(); document.body.style.userSelect = 'none'; });
-  window.addEventListener('mousemove', e => { if (dragging) dr.style.width = Math.max(340, Math.min(window.innerWidth * 0.82, e.clientX)) + 'px'; });
-  window.addEventListener('mouseup', () => { if (dragging) { dragging = false; document.body.style.userSelect = ''; } });
+  let saveTimer = null;
+  const persist = () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      fetch('/api/plume/save', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: curName, tree: ctx.tree }) }).catch(() => {});
+    }, 350);
+  };
+  const pushPreview = () => {
+    // Use the variant form's REAL attach values (prefilled from copy-from) — hardcoding
+    // 0,0,0 / 1,1,1 here rendered mod plumes unscaled & mispositioned on top of the nozzle.
+    const at = (getAttach && getAttach()) ||
+      { overrideParentTransform: '', position: '0,0,0', rotation: '0,0,0', scale: '1,1,1' };
+    VARIANT_PREVIEW = { part: SELECTED, wfModuleID: wfModuleID || '', template: curName,
+      attach: at, inlineTree: ctx.tree };
+    ensureWfControlBar();
+    updatePlumes();
+  };
+
+  // "Add effect" — the Library's palette flow, wired to the inline mount. Adding an
+  // effect counts as an edit, so it goes through the same silent-fork onChange path.
+  const addBtn = el('button', 'ok', '＋ Add effect');
+  addBtn.type = 'button';
+  addBtn.title = 'Add a Waterfall effect from the palette (models/shaders harvested from your install)';
+  addBtn.addEventListener('click', () => window.PlumeEdit.addEffect(ctx));
+  head.appendChild(addBtn);
+
+  const ctx = {
+    tree: data.node, editable: true, params, openIdx: new Set(), openDialog,
+    onChange: async () => {
+      if (!forked && !forking) {
+        forking = true;
+        try {
+          curName = await forkPlumeTemplate(templateName, slugifyPlumeName(forkNameBase));
+          forked = true;
+          nameSpan.textContent = curName;
+          badge.className = 'srcbadge customized'; badge.textContent = 'customized';
+          if (onAssign) onAssign(curName);
+        } catch (ex) {
+          console.error('[app] silent plume fork failed:', ex);
+        } finally { forking = false; }
+      }
+      persist();
+      pushPreview();
+    },
+  };
+  window.PlumeEdit.mount(body, ctx);
+  pushPreview();
 }
 
 async function fetchVariantInfo(part) {
@@ -1602,13 +1677,116 @@ async function fetchVariantList() {
 let ALL_TEMPLATE_NAMES = null;
 async function ensureTemplateNames() {
   if (ALL_TEMPLATE_NAMES) return ALL_TEMPLATE_NAMES;
-  try {
-    const rows = await (await fetch('/api/plume/list')).json();
-    const custom = rows.filter(r => r.source === 'custom').map(r => r.name).sort();
-    const mod = rows.filter(r => r.source !== 'custom').map(r => r.name).sort();
-    ALL_TEMPLATE_NAMES = [...custom, ...mod];
-  } catch (e) { ALL_TEMPLATE_NAMES = []; }
+  const rows = await ensurePlumeListRows();
+  const custom = rows.filter(r => r.source === 'custom').map(r => r.name).sort();
+  const mod = rows.filter(r => r.source !== 'custom').map(r => r.name).sort();
+  ALL_TEMPLATE_NAMES = [...custom, ...mod];
   return ALL_TEMPLATE_NAMES;
+}
+
+// §8.6 shared row data for the plume search picker + source badges: /api/plume/list
+// already carries {name, source:'mod'|'custom', providedBy, base}. Cached once, reused
+// by both the picker popover and source-badge lookups.
+let ALL_PLUME_ROWS = null;
+let PROP_PRESETS = null;
+async function ensurePropPresets() {
+  if (PROP_PRESETS) return PROP_PRESETS;
+  const r = await fetch('/api/propellant-presets');
+  if (!r.ok) throw new Error('no presets endpoint');
+  PROP_PRESETS = await r.json();
+  return PROP_PRESETS;
+}
+
+async function ensurePlumeListRows() {
+  if (ALL_PLUME_ROWS) return ALL_PLUME_ROWS;
+  try { ALL_PLUME_ROWS = await (await fetch('/api/plume/list')).json(); }
+  catch (e) { ALL_PLUME_ROWS = []; }
+  return ALL_PLUME_ROWS;
+}
+function invalidatePlumeListCache() { ALL_PLUME_ROWS = null; ALL_TEMPLATE_NAMES = null; }
+function plumeRowByName(name) {
+  return (ALL_PLUME_ROWS || []).find(r => r.name === name) || null;
+}
+
+/* ---------------- §8.6 plume search picker (popover, no native dialogs) ---------------- */
+
+let PLUME_PICKER_EL = null;
+function closePlumePicker() {
+  if (PLUME_PICKER_EL) { PLUME_PICKER_EL.remove(); PLUME_PICKER_EL = null; }
+  document.removeEventListener('mousedown', pickerOutsideClick, true);
+}
+function pickerOutsideClick(e) {
+  if (PLUME_PICKER_EL && !PLUME_PICKER_EL.contains(e.target)) closePlumePicker();
+}
+
+// Opens a search popover anchored under `anchorEl`. `onSelect(name)` is called when a row
+// is chosen (click, Enter, or dblclick). Replaces the bare <input list=datalist> picker.
+async function openPlumePicker(anchorEl, onSelect) {
+  closePlumePicker();
+  const rows = await ensurePlumeListRows();
+  const pop = el('div', 'plume-picker');
+  const rect = anchorEl.getBoundingClientRect();
+  pop.style.left = (rect.left + window.scrollX) + 'px';
+  pop.style.top = (rect.bottom + window.scrollY + 4) + 'px';
+  document.body.appendChild(pop);
+  PLUME_PICKER_EL = pop;
+
+  const search = el('input'); search.type = 'text'; search.placeholder = 'Search plume templates…';
+  pop.appendChild(search);
+  const list = el('div', 'pplist');
+  pop.appendChild(list);
+
+  let hiIdx = -1, flatRows = [];
+  const render = () => {
+    const q = search.value.trim().toLowerCase();
+    const custom = rows.filter(r => r.source === 'custom');
+    const mod = rows.filter(r => r.source !== 'custom');
+    const matches = r => !q || r.name.toLowerCase().includes(q) ||
+      (r.providedBy || '').toLowerCase().includes(q);
+    list.textContent = '';
+    flatRows = [];
+    const addGroup = (label, arr) => {
+      const filtered = arr.filter(matches);
+      if (!filtered.length) return;
+      list.appendChild(el('div', 'ppgroup', label));
+      for (const r of filtered) {
+        const row = el('div', 'pprow');
+        row.appendChild(el('span', null, r.name));
+        row.appendChild(el('span', 'srcbadge ' + r.source, r.source));
+        if (r.source === 'custom' && r.base) row.appendChild(el('span', 'ppbase', 'base: ' + r.base));
+        row.addEventListener('click', () => { onSelect(r.name); closePlumePicker(); });
+        list.appendChild(row);
+        flatRows.push(row);
+      }
+    };
+    addGroup('Custom', custom);
+    addGroup('Mod', mod);
+    if (!flatRows.length) list.appendChild(el('div', 'ppempty', 'No matching templates.'));
+    hiIdx = -1;
+  };
+  const setHi = i => {
+    flatRows.forEach(r => r.classList.remove('hi'));
+    if (i >= 0 && i < flatRows.length) { flatRows[i].classList.add('hi'); flatRows[i].scrollIntoView({ block: 'nearest' }); }
+    hiIdx = i;
+  };
+  search.addEventListener('input', render);
+  search.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); setHi(Math.min(hiIdx + 1, flatRows.length - 1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setHi(Math.max(hiIdx - 1, 0)); }
+    else if (e.key === 'Enter') { e.preventDefault(); if (hiIdx >= 0) flatRows[hiIdx].click(); }
+    else if (e.key === 'Escape') { e.preventDefault(); closePlumePicker(); }
+  });
+  render();
+  setTimeout(() => { search.focus(); document.addEventListener('mousedown', pickerOutsideClick, true); }, 0);
+}
+
+// Wires a text <input> to open the picker on focus/click, showing the picked name in the
+// input's value (read-only-ish — typing directly is still allowed as a fallback).
+function wirePlumePicker(inp, onSelect) {
+  inp.readOnly = true;
+  inp.style.cursor = 'pointer';
+  inp.addEventListener('click', () => openPlumePicker(inp, onSelect));
+  inp.addEventListener('focus', () => openPlumePicker(inp, onSelect));
 }
 
 // Manifest-stored added variants (from GET /api/variant/list) use the nested
@@ -1623,7 +1801,19 @@ function flattenAddedVariant(v) {
     addedMass: v.addedMass || '', addedCost: v.addedCost || '',
     transforms: Array.isArray(v.transforms) ? v.transforms : null,
     plume: v.plume || null,
+    modelScale: v.modelScale || '',
   };
+}
+
+// §8.7 auto-fork: POST /api/plume/fork {base, newName} -> {name (deduped), manifest}.
+async function forkPlumeTemplate(baseTemplate, desiredName) {
+  const r = await (await fetch('/api/plume/fork', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ base: baseTemplate, newName: desiredName }),
+  })).json();
+  if (r.error) throw new Error(r.error);
+  invalidatePlumeListCache();
+  return r.name;
 }
 
 function variantStatus(box, msg, isError) {
@@ -1692,8 +1882,43 @@ function buildVariantCard(card, info, added) {
   renderSwitchers(switchesWrap, excludeIds);
   if (switchesWrap.children.length) card.appendChild(switchesWrap);
 
-  const formHost = el('div', 'variantform-host');
-  card.appendChild(formHost);
+  // §8.5 — everything below the tab strip (+ the non-engine switches above) lives in one
+  // bordered "Variant: <activeTabName>" panel, so the panel always reads like the config
+  // that's actually active (live shipped subtype OR the EE variant being added/edited).
+  const scope = el('div', 'variant-scope');
+  const scopeHead = el('div', 'vsHead', 'Variant: …');
+  scope.appendChild(scopeHead);
+
+  // §9.1 — Engine / Model / Plume sub-tabs. The old standalone "Engines" and "Waterfall"
+  // sections' functionality now lives inside these panels (shipped subtypes: read-only
+  // content via buildVariantReadonly(); EE-added variants: the editable form via
+  // buildVariantForm()) — nothing else renders them any more (see renderDetail()).
+  const topHost = el('div', 'variantform-top');
+  scope.appendChild(topHost);
+  const vtabs = el('div', 'vtabs');
+  scope.appendChild(vtabs);
+  const panelEngine = el('div', 'vtabpanel');
+  const panelModel = el('div', 'vtabpanel');
+  const panelPlume = el('div', 'vtabpanel');
+  scope.appendChild(panelEngine);
+  scope.appendChild(panelModel);
+  scope.appendChild(panelPlume);
+  const hosts = { top: topHost, engine: panelEngine, model: panelModel, plume: panelPlume };
+  const TAB_DEFS = [['engine', 'Engine', panelEngine], ['model', 'Model', panelModel], ['plume', 'Plume', panelPlume]];
+  if (!VARIANT_UI.subTab) VARIANT_UI.subTab = 'engine';
+  function showSubTab(id) {
+    VARIANT_UI.subTab = id;
+    for (const [tid, , panel] of TAB_DEFS) panel.classList.toggle('hidden', tid !== id);
+    vtabs.querySelectorAll('.vtab').forEach(b => b.classList.toggle('on', b.dataset.tid === id));
+  }
+  for (const [tid, label] of TAB_DEFS) {
+    const b = el('div', 'vtab', label);
+    b.dataset.tid = tid;
+    b.addEventListener('click', () => showSubTab(tid));
+    vtabs.appendChild(b);
+  }
+  showSubTab(VARIANT_UI.subTab);
+  card.appendChild(scope);
 
   // The real (shipped) engine-config subtypes are now the LIVE selector: clicking
   // one sets SUBSEL[engineB9.moduleID] to its index in the real B9PS module and
@@ -1708,6 +1933,22 @@ function buildVariantCard(card, info, added) {
   const curSubIdx = realB9 ? (SUBSEL[info.engineB9.moduleID] ?? 0) : -1;
 
   const realSubs = info.subtypes.filter(s => !s.isBase);
+  // Blank engine (no engine-config switch): show the shipped config as a locked "Stock"
+  // tab so a draft variant has something to sit next to. Lock is a text-style glyph
+  // (Segoe UI Symbol), NOT the color emoji.
+  if (!realSubs.length) {
+    const t = el('div', 'petab def stock');
+    t.appendChild(el('span', 'lockchar', '\u{1F512}'));
+    t.appendChild(document.createTextNode(' Stock'));
+    t.title = 'The part’s shipped config (read-only)';
+    if (VARIANT_UI.mode !== 'add') t.classList.add('on');
+    t.addEventListener('click', () => {
+      VARIANT_PREVIEW = null;
+      VARIANT_UI = { part: info.part, mode: null, editingName: null };
+      refresh();
+    });
+    petabs.appendChild(t);
+  }
   for (const s of realSubs) {
     const t = el('div', 'petab def', s.title || s.name);
     if (realB9) {
@@ -1741,24 +1982,94 @@ function buildVariantCard(card, info, added) {
     petabs.appendChild(t);
   }
   const addTab = el('div', 'petab add', '+ New variant');
-  addTab.addEventListener('click', () => {
+  // Draft tab: while a new (unsaved) variant is being edited, the add tab turns into a
+  // dashed tab whose label follows the Name field live.
+  const draftName = n => {
+    addTab.textContent = n || 'New variant';
+    // browser-tab-style close: discards the draft and returns to the shipped view
+    const x = el('span', 'petab-x', ' ×');
+    x.title = 'Discard this draft';
+    x.addEventListener('click', ev => {
+      ev.stopPropagation();
+      VARIANT_PREVIEW = null;
+      VARIANT_UI = { part: info.part, mode: null, editingName: null };
+      refresh();
+    });
+    addTab.appendChild(x);
+    scopeHead.textContent = 'Variant: ' + (n || 'New variant');
+  };
+  const openDraft = () => {
     VARIANT_PREVIEW = null;
     VARIANT_UI = { part: info.part, mode: 'add', editingName: null };
-    buildVariantForm(formHost, info, null);
+    scope.classList.remove('vs-readonly');
+    addTab.classList.add('draft');
+    draftName('');
+    buildVariantForm(hosts, info, null, draftName);
     petabs.querySelectorAll('.petab').forEach(p => p.classList.remove('on'));
     addTab.classList.add('on');
-  });
+  };
+  addTab.addEventListener('click', openDraft);
   petabs.appendChild(addTab);
 
   if (VARIANT_UI.mode === 'add') {
     const rawPreset = VARIANT_UI.editingName ? added.find(v => v.name === VARIANT_UI.editingName) : null;
     const preset = rawPreset ? flattenAddedVariant(rawPreset) : null;
-    buildVariantForm(formHost, info, preset);
+    scopeHead.textContent = 'Variant: ' + (VARIANT_UI.editingName || 'New variant');
+    scope.classList.remove('vs-readonly');
+    buildVariantForm(hosts, info, preset, VARIANT_UI.editingName ? null : draftName);
     petabs.querySelectorAll('.petab').forEach(p => {
       if (VARIANT_UI.editingName && p.textContent.trim().startsWith(VARIANT_UI.editingName)) p.classList.add('on');
     });
-    if (!VARIANT_UI.editingName) addTab.classList.add('on');
+    if (!VARIANT_UI.editingName) { addTab.classList.add('on'); addTab.classList.add('draft'); }
+  } else {
+    // Viewing a shipped (live) subtype's resolved config — read-only display, driven
+    // purely by SUBSEL (the tab click above already set it + called refresh()).
+    let activeSub = null;
+    if (realB9 && curSubIdx >= 0 && realB9Subs[curSubIdx]) {
+      const activeName = keyOf(realB9Subs[curSubIdx], 'name') || '';
+      activeSub = info.subtypes.find(s => s.name === activeName) || null;
+    }
+    if (!activeSub) activeSub = info.subtypes.find(s => s.isBase) || info.subtypes[0] || null;
+    scopeHead.textContent = 'Variant: ' + (activeSub ? (activeSub.title || activeSub.name) : '(unknown)');
+    scope.classList.add('vs-readonly');
+    if (activeSub) buildVariantReadonly(hosts, info, activeSub);
   }
+}
+
+// §9.1 read-only panel content for a shipped (mod-provided) subtype, routed into the
+// Engine / Model / Plume sub-tabs. Nothing here writes to the manifest — clicking the tab
+// (already wired in buildVariantCard()) is the only way to change anything for a shipped
+// subtype. Engine content reuses renderEngines() (moved out of the old standalone
+// "Engines" section — still edits the live part tree via EDITS, exactly as before);
+// Plume content reuses renderWaterfall() (moved out of the old standalone "Waterfall"
+// section), which now embeds a read-only inline PlumeEdit view (§9.2/§9.3 — no fork here).
+function buildVariantReadonly(hosts, info, sub) {
+  hosts.top.textContent = '';
+  hosts.engine.textContent = '';
+  hosts.model.textContent = '';
+  hosts.plume.textContent = '';
+
+  renderEngines(hosts.engine);
+  if (!hosts.engine.children.length)
+    hosts.engine.appendChild(el('div', 'wfnote', 'No engine module on this part/subtype.'));
+
+  const pool = info.transformPool || [];
+  if (pool.length) {
+    const active = new Set(sub.transforms || []);
+    const me = el('div', 'vs-me-list');
+    me.appendChild(document.createTextNode('Model elements: '));
+    pool.forEach((name, i) => {
+      if (i) me.appendChild(document.createTextNode(', '));
+      me.appendChild(el('span', active.has(name) ? '' : 'off', name));
+    });
+    hosts.model.appendChild(me);
+  } else {
+    hosts.model.appendChild(el('div', 'wfnote', 'No switchable model elements known for this part.'));
+  }
+
+  renderWaterfall(hosts.plume);
+  if (!hosts.plume.children.length)
+    hosts.plume.appendChild(el('div', 'wfnote', 'No Waterfall plume module for this part/subtype.'));
 }
 
 async function removeVariant(card, part, name) {
@@ -1793,9 +2104,16 @@ function propRow(tbody, prop) {
   return { tr, nameInp, ratioInp, ck };
 }
 
-function buildVariantForm(host, info, preset) {
-  host.textContent = '';
-  const wrap = el('div', 'variantform');
+function buildVariantForm(hosts, info, preset, onName) {
+  hosts.top.textContent = '';
+  hosts.engine.textContent = '';
+  hosts.model.textContent = '';
+  hosts.plume.textContent = '';
+  // §9.1: name/title/copy-from + Save live above the sub-tabs (always visible regardless
+  // of which tab is active); thrust/ISP/propellants go in Engine, model elements/scale in
+  // Model, plume picker + inline editor in Plume.
+  const top = el('div', 'variantform');
+  const wrap = el('div', 'variantform engine-fields');   // kept for variantform-scoped CSS
 
   const namerow = el('div', 'namerow');
   namerow.appendChild(el('span', null, 'Copy from'));
@@ -1807,7 +2125,21 @@ function buildVariantForm(host, info, preset) {
   }
   if (preset && preset.copyFrom) copySel.value = preset.copyFrom;
   namerow.appendChild(copySel);
-  wrap.appendChild(namerow);
+  top.appendChild(namerow);
+
+  const idGrid = el('div', 'fieldgrid');
+  const mkTopF = (label, value) => {
+    const f = el('div', 'f');
+    f.appendChild(el('label', null, label));
+    const inp = el('input', 'inp'); inp.type = 'text'; inp.value = value == null ? '' : value;
+    f.appendChild(inp);
+    idGrid.appendChild(f);
+    return inp;
+  };
+  const nameInp = mkTopF('Name (unique)', preset ? preset.name : '');
+  const titleInp = mkTopF('Title (optional)', preset ? preset.title : '');
+  if (onName) nameInp.addEventListener('input', () => onName(nameInp.value.trim()));
+  top.appendChild(idGrid);
 
   const grid = el('div', 'fieldgrid');
   const mkF = (label, value, ro) => {
@@ -1819,14 +2151,38 @@ function buildVariantForm(host, info, preset) {
     grid.appendChild(f);
     return inp;
   };
-  const nameInp = mkF('Name (unique)', preset ? preset.name : '');
-  const titleInp = mkF('Title (optional)', preset ? preset.title : '');
   const thrustInp = mkF('Max thrust (kN)', preset ? preset.maxThrust : '');
   const minThrustInp = mkF('Min thrust (kN)', preset ? preset.minThrust : '');
   const heatInp = mkF('Heat production', preset ? preset.heatProduction : '');
   const massInp = mkF('Added mass (t)', preset ? preset.addedMass : '');
   const costInp = mkF('Added cost', preset ? preset.addedCost : '');
   wrap.appendChild(grid);
+
+  // §9.1 Model tab content starts here.
+  const modelWrap = el('div', 'variantform');
+
+  // §8.2/8.3 Model scale (visual) — TRANSFORM scaleOffset per root transform. Empty = inherit.
+  // Hidden/disabled entirely when the part model's root transform(s) are unknown.
+  let scaleInp = null;
+  const rootTransforms = info.rootTransforms || [];
+  if (rootTransforms.length) {
+    const msField = el('div', 'field');
+    msField.appendChild(el('label', null, 'Model scale (visual)'));
+    scaleInp = el('input', 'inp'); scaleInp.type = 'text'; scaleInp.placeholder = '(inherit — blank)';
+    scaleInp.value = preset ? (preset.modelScale || '') : '';
+    msField.appendChild(scaleInp);
+    msField.appendChild(el('div', 'msnote',
+      'Uniform scale applied to ' + rootTransforms.join(', ') + '. Note: attach nodes do NOT move with scale.'));
+    modelWrap.appendChild(msField);
+  }
+  const prefillScale = subName => {
+    if (!scaleInp || (preset && preset.modelScale)) return;   // don't clobber an explicit edit-preset value
+    const sub = info.subtypes.find(s => s.name === subName);
+    const offs = (sub && sub.scaleOffsets) || {};
+    const vals = [...new Set(Object.values(offs).map(v => String(v)))];
+    scaleInp.value = vals.length === 1 ? vals[0] : '';
+  };
+  if (!preset) { prefillScale(copySel.value); copySel.addEventListener('change', () => prefillScale(copySel.value)); }
 
   // ISP curve — reuse the ispCurveTable widget by faking an {node, editPath} pair
   // that lives entirely in local rows/EDITS-free state (no part-tree path involved).
@@ -1866,6 +2222,28 @@ function buildVariantForm(host, info, preset) {
   const propField = el('div', 'field curve');
   propField.appendChild(el('label', null, 'Propellants'));
   const propWrap = el('div', 'isptable-wrap');
+  // Preset combos harvested from every engine in the install (name set + most common
+  // ratios + engine count). Selecting one replaces the table rows.
+  const presetSel = el('select', 'inp propPreset');
+  presetSel.appendChild(el('option', null, 'Preset mixtures…'));
+  presetSel.firstChild.value = '';
+  ensurePropPresets().then(list => {
+    for (const p of list) {
+      const o = el('option', null,
+        p.label + '  (' + p.propellants.map(x => x.ratio).join(':') + ')  — ' + p.count + ' engines');
+      o.value = JSON.stringify(p.propellants);
+      presetSel.appendChild(o);
+    }
+  }).catch(() => { presetSel.disabled = true; presetSel.firstChild.textContent = 'Presets need a server restart'; });
+  presetSel.addEventListener('change', () => {
+    if (!presetSel.value) return;
+    const props = JSON.parse(presetSel.value);
+    propTable.querySelectorAll('tr:not(:first-child)').forEach(tr => tr.remove());
+    propRows.length = 0;
+    for (const p of props) propRows.push(propRow(propBody, p));
+    presetSel.selectedIndex = 0;
+  });
+  propWrap.appendChild(presetSel);
   const propTable = el('table', 'isptable');
   const propThead = el('tr');
   propThead.appendChild(el('th', null, 'Name'));
@@ -1902,7 +2280,7 @@ function buildVariantForm(host, info, preset) {
       return { name, cb };
     });
     meField.appendChild(meWrap);
-    wrap.appendChild(meField);
+    modelWrap.appendChild(meField);
   }
   const prefillTransforms = subName => {
     if (!meChecks.length) return;
@@ -1913,8 +2291,9 @@ function buildVariantForm(host, info, preset) {
   prefillTransforms(copySel.value);
   copySel.addEventListener('change', () => prefillTransforms(copySel.value));
 
-  // Copy-from change -> prefill fields from that subtype's resolved stats
-  copySel.addEventListener('change', () => {
+  // Prefill fields from the copy-from subtype's resolved stats — on build AND on change,
+  // so the form always shows concrete values instead of vague blank-means-inherit boxes.
+  const prefillStats = () => {
     const sub = info.subtypes.find(s => s.name === copySel.value);
     if (!sub) return;
     thrustInp.value = sub.maxThrust ?? '';
@@ -1927,30 +2306,56 @@ function buildVariantForm(host, info, preset) {
     propTable.querySelectorAll('tr:not(:first-child)').forEach(tr => tr.remove());
     propRows.length = 0;
     for (const p of (sub.propellants || [])) propRows.push(propRow(propBody, p));
-  });
+  };
+  if (!preset) prefillStats();          // editing a saved variant keeps its own values
+  copySel.addEventListener('change', prefillStats);
 
-  // Plume (optional) — pick a template for THIS variant, or leave blank to inherit copy-from's plume.
+  // §9.1/§9.2 Plume tab — pick a template for THIS variant (blank = inherit copy-from's
+  // plume), attach offsets, and the FULL inline PlumeEdit editor expanded in place. §9.3:
+  // editing the inline editor silently forks a mod/inherited template on first change and
+  // assigns the fork here (badge + template field update instantly, no status text).
+  const plumeWrap = el('div', 'variantform');
   const plumeField = el('div', 'field');
   plumeField.appendChild(el('label', null, 'Plume (optional)'));
+  const plumeEditorHost = el('div', 'plumeInlineWrap');
   let plumeTplInp = null, plumeOptInp = null, plumePosInp = null, plumeRotInp = null, plumeScaleInp = null;
-  if (info.wfModuleID) {
+  // §10.1: enable the Plume tab even when the part ships NO ModuleWaterfallFX — at compile time we
+  // mint one (moduleID=eeWaterfall). info.wfModuleID stays '' (the implied minted target).
+  {
+    const mintingWf = !info.wfModuleID;
     const inheritNote = el('div', 'wfnote', '');
     plumeField.appendChild(inheritNote);
-    // shared datalist of all template names (custom first, then mod)
-    const dlId = 'eeVariantTplList';
-    let dl = document.getElementById(dlId);
-    if (!dl) { dl = el('datalist'); dl.id = dlId; document.body.appendChild(dl); }
-    ensureTemplateNames().then(names => {
-      if (!dl.children.length) for (const n of names) { const o = el('option'); o.value = n; dl.appendChild(o); }
-    });
+    if (mintingWf)
+      plumeField.appendChild(el('div', 'wfnote',
+        'This part has no Waterfall module — one will be minted (eeWaterfall) so this plume renders on the engine.'));
     const trow = el('div', 'f');
     trow.appendChild(el('label', null, 'Plume template (blank = inherit)'));
-    plumeTplInp = el('input', 'inp'); plumeTplInp.type = 'text'; plumeTplInp.setAttribute('list', dlId);
-    plumeTplInp.placeholder = '(inherit copy-from plume)';
-    trow.appendChild(plumeTplInp);
+    const trowInner = el('div', 'row');
+    trowInner.style.display = 'flex'; trowInner.style.gap = '6px';
+    plumeTplInp = el('input', 'inp'); plumeTplInp.type = 'text';
+    plumeTplInp.placeholder = '(inherit copy-from plume) — click to search';
+    const refreshInlineEditor = () => {
+      const sub = info.subtypes.find(s => s.name === copySel.value) || info.subtypes[0] || {};
+      const activeName = plumeTplInp.value.trim() ||
+        (sub.plume && sub.plume.template) || (info.basePlume && info.basePlume.template) || '';
+      const variantName = nameInp.value.trim() || 'variant';
+      mountPlumeEditable(plumeEditorHost, activeName, info.wfModuleID, info.part + '_' + variantName,
+        newName => { plumeTplInp.value = newName; },
+        () => ({ overrideParentTransform: plumeOptInp ? plumeOptInp.value.trim() : '',
+                 position: (plumePosInp && plumePosInp.value.trim()) || '0,0,0',
+                 rotation: (plumeRotInp && plumeRotInp.value.trim()) || '0,0,0',
+                 scale: (plumeScaleInp && plumeScaleInp.value.trim()) || '1,1,1' }));
+    };
+    wirePlumePicker(plumeTplInp, name => { plumeTplInp.value = name; refreshInlineEditor(); });
+    trowInner.appendChild(plumeTplInp);
+    const clearBtn = el('button', 'ghost', '×'); clearBtn.type = 'button'; clearBtn.title = 'Clear (inherit)';
+    clearBtn.addEventListener('click', () => { plumeTplInp.value = ''; refreshInlineEditor(); });
+    trowInner.appendChild(clearBtn);
+    trow.appendChild(trowInner);
     plumeField.appendChild(trow);
-    // Make a brand-new custom plume for this variant: fork the inherited (or typed) template into a
-    // fresh editable custom template, assign it here, and open the Library to tweak it.
+    ensurePlumeListRows();
+    // Make a brand-new custom plume for this variant: fork the inherited (or typed)
+    // template into a fresh editable custom template and open it inline right below.
     const mkCustomBtn = el('button', 'ok', '＋ New custom plume');
     mkCustomBtn.type = 'button';
     mkCustomBtn.title = 'Fork the inherited plume into a new editable custom template and assign it to this variant';
@@ -1967,79 +2372,86 @@ function buildVariantForm(host, info, preset) {
           body: JSON.stringify({ source, newName }),
         })).json();
         if (r.error) throw new Error(r.error);
-        ALL_TEMPLATE_NAMES = null;                       // invalidate the datalist cache
+        invalidatePlumeListCache();
         plumeTplInp.value = newName;                      // assign the new custom plume to this variant
-        const dl2 = document.getElementById(dlId);
-        if (dl2) { const o = el('option'); o.value = newName; dl2.insertBefore(o, dl2.firstChild); }
         inheritNote.textContent = 'Created custom plume "' + newName + '" (forked from ' + source +
-          '), assigned to this variant. Save the variant, then Compile. Opening the Library to edit it…';
-        window.open('plumelib.html?template=' + encodeURIComponent(newName), '_blank');
+          '), assigned to this variant. Save the variant, then Compile.';
+        refreshInlineEditor();
       } catch (ex) {
         inheritNote.textContent = 'Create custom plume failed: ' + (ex.message || ex);
       } finally { mkCustomBtn.disabled = false; }
     });
     plumeField.appendChild(mkCustomBtn);
-    // Edit the plume inline (full editor drawer) with live preview on this engine.
-    const editBtn = el('button', 'ok', 'Edit plume ✎');
-    editBtn.type = 'button';
-    editBtn.title = 'Open the full plume editor for this variant, previewing live on the engine';
-    editBtn.addEventListener('click', () => {
-      const sub = info.subtypes.find(s => s.name === copySel.value) || info.subtypes[0] || {};
-      const tpl = plumeTplInp.value.trim() || (sub.plume && sub.plume.template) || (info.basePlume && info.basePlume.template) || '';
-      if (!tpl) { inheritNote.textContent = 'No plume to edit yet — pick a template or create a custom one first.'; return; }
-      openPlumeDrawer(tpl, {
-        overrideParentTransform: plumeOptInp.value.trim(), position: plumePosInp.value.trim() || '0,0,0',
-        rotation: plumeRotInp.value.trim() || '0,0,0', scale: plumeScaleInp.value.trim() || '1,1,1',
-      }, info.wfModuleID);
-    });
-    plumeField.appendChild(editBtn);
     const ag = el('div', 'fieldgrid');
     const mkA = (lbl, v) => { const f = el('div', 'f'); f.appendChild(el('label', null, lbl));
       const i = el('input', 'inp'); i.type = 'text'; i.value = v; f.appendChild(i); ag.appendChild(f); return i; };
-    plumeOptInp = mkA('overrideParentTransform', '');
+    // §10.2: attach-transform picker — a real dropdown of the part's transform names,
+    // annotated `(×N)`; free-form/legacy values survive as an extra "(custom)" option.
+    {
+      const f = el('div', 'f');
+      f.appendChild(el('label', null, 'Attach to transform'));
+      plumeOptInp = el('select', 'inp');
+      f.appendChild(plumeOptInp);
+      ag.appendChild(f);
+      fillTransformSelect(plumeOptInp);
+    }
     plumePosInp = mkA('position (x,y,z)', '0,0,0');
     plumeRotInp = mkA('rotation (x,y,z)', '0,0,0');
     plumeScaleInp = mkA('scale (x,y,z)', '1,1,1');
+    // setting a value that isn't in the dropdown yet (copy-from prefill, saved variants)
+    // must materialize an option rather than being silently dropped by the <select>
+    const setAttachValue = v => {
+      v = v || '';
+      if (v && ![...plumeOptInp.options].some(o => o.value === v)) {
+        const o = el('option', null, v + ' (custom)'); o.value = v; plumeOptInp.appendChild(o);
+      }
+      plumeOptInp.value = v;
+    };
+    // attach-offset edits re-render the live preview with the new attach
+    for (const i of [plumeOptInp, plumePosInp, plumeRotInp, plumeScaleInp])
+      i.addEventListener('change', refreshInlineEditor);
     plumeField.appendChild(ag);
-    const plumeBtn = el('button', 'ghost', 'Fine-tune / make custom in Library →');
-    plumeBtn.type = 'button';
-    plumeBtn.addEventListener('click', () => window.open('plumelib.html', '_blank'));
-    plumeField.appendChild(plumeBtn);
     // prefill inherited-plume note + attach offsets from the copy-from subtype's current plume
     const prefillPlume = () => {
       const sub = info.subtypes.find(s => s.name === copySel.value) || info.subtypes[0] || {};
       const sp = sub.plume || info.basePlume || {};
-      inheritNote.textContent = 'Inherits ' + (copySel.value === '(stock)' ? 'stock' : copySel.value) +
-        ' plume: ' + (sp.template || '(none)') + '. Leave blank to keep it, or pick another below.';
-      plumeOptInp.value = sp.overrideParentTransform || '';
+      inheritNote.textContent = mintingWf
+        ? 'No stock plume — pick a template below; it will render on the engine\'s thrust transforms.'
+        : 'Inherits ' + (copySel.value === '(stock)' ? 'stock' : copySel.value) +
+          ' plume: ' + (sp.template || '(none)') + '. Leave blank to keep it, or pick another below.';
+      setAttachValue(sp.overrideParentTransform || '');
       plumePosInp.value = sp.position || '0,0,0';
       plumeRotInp.value = sp.rotation || '0,0,0';
       plumeScaleInp.value = sp.scale || '1,1,1';
+      // §10.1/§10.2: when minting a WF (no stock plume to inherit an attach from), default the
+      // attach to the most common thrust-like transform so the plume lights the nozzles.
+      if (mintingWf && !plumeOptInp.value)
+        ensureTransformCounts().then(c => { if (!plumeOptInp.value) setAttachValue(defaultAttachTransform(c)); });
     };
     prefillPlume();
-    copySel.addEventListener('change', prefillPlume);
+    copySel.addEventListener('change', () => { prefillPlume(); refreshInlineEditor(); });
     if (preset && preset.plume) {
       plumeTplInp.value = preset.plume.template || '';
-      plumeOptInp.value = preset.plume.overrideParentTransform || '';
+      setAttachValue(preset.plume.overrideParentTransform || '');
       plumePosInp.value = preset.plume.position || '0,0,0';
       plumeRotInp.value = preset.plume.rotation || '0,0,0';
       plumeScaleInp.value = preset.plume.scale || '1,1,1';
     }
-  } else {
-    plumeField.appendChild(el('div', 'wfnote', 'This part has no Waterfall plume module — plume options disabled.'));
+    plumeField.appendChild(plumeEditorHost);
+    refreshInlineEditor();
   }
-  wrap.appendChild(plumeField);
+  plumeWrap.appendChild(plumeField);
 
   const tools = el('div', 'petools');
   const saveBtn = el('button', 'ok', preset ? 'Save changes' : 'Save variant');
   saveBtn.type = 'button';
   tools.appendChild(saveBtn);
-  wrap.appendChild(tools);
+  top.appendChild(tools);
 
   saveBtn.addEventListener('click', async () => {
     const name = nameInp.value.trim();
-    if (!name) { variantStatus(wrap, 'Name is required.', true); return; }
-    if (info.engineB9Count > 1) { variantStatus(wrap, 'Refused: ambiguous engine-config B9PartSwitch (see banner above).', true); return; }
+    if (!name) { variantStatus(top, 'Name is required.', true); return; }
+    if (info.engineB9Count > 1) { variantStatus(top, 'Refused: ambiguous engine-config B9PartSwitch (see banner above).', true); return; }
     const fields = {};
     if (thrustInp.value.trim() !== '') fields.maxThrust = thrustInp.value.trim();
     if (minThrustInp.value.trim() !== '') fields.minThrust = minThrustInp.value.trim();
@@ -2055,7 +2467,8 @@ function buildVariantForm(host, info, preset) {
 
     const copyFrom = copySel.value === '(stock)' ? null : copySel.value;
     let plume = null;
-    if (info.wfModuleID && plumeTplInp && plumeTplInp.value.trim()) {
+    // §10.1: allow a plume even with no shipped WF module — compile mints eeWaterfall.
+    if (plumeTplInp && plumeTplInp.value.trim()) {
       plume = {
         template: plumeTplInp.value.trim(),
         overrideParentTransform: plumeOptInp.value.trim(),
@@ -2074,9 +2487,10 @@ function buildVariantForm(host, info, preset) {
         propellants: propellants.length ? propellants : null,
         plume,
         transforms: transformPool.length ? meChecks.filter(c => c.cb.checked).map(c => c.name) : null,
+        modelScale: scaleInp ? scaleInp.value.trim() : '',
       },
     };
-    variantStatus(wrap, 'Saving…', false);
+    variantStatus(top, 'Saving…', false);
     try {
       const r = await (await fetch('/api/variant/add', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2086,19 +2500,22 @@ function buildVariantForm(host, info, preset) {
       VARIANT_LIST = null;
       VARIANT_UI = { part: info.part, mode: 'add', editingName: name };
       const list = await fetchVariantList();
-      const card = wrap.closest('.pe');
+      const card = hosts.top.closest('.pe');
       if (card) {
         card.textContent = '';
         buildVariantCard(card, info, (list && list[info.part] && list[info.part].subtypes) || []);
-        const newWrap = card.querySelector('.variantform');
-        variantStatus(newWrap || card, 'Variant saved. Open the Plume Manager and click Compile to apply in-game.', false);
+        const newTop = card.querySelector('.variantform-top .variantform');
+        variantStatus(newTop || card, 'Variant saved. Compile from the header to apply in-game.', false);
       }
     } catch (ex) {
-      variantStatus(wrap, ex.message || String(ex), true);
+      variantStatus(top, ex.message || String(ex), true);
     }
   });
 
-  host.appendChild(wrap);
+  hosts.top.appendChild(top);
+  hosts.engine.appendChild(wrap);
+  hosts.model.appendChild(modelWrap);
+  hosts.plume.appendChild(plumeWrap);
 }
 
 function renderWarnings(root, d) {

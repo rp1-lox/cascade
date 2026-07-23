@@ -12,12 +12,25 @@ it looks in flight, and generates clean ModuleManager patches you can drop back 
 - **Browse every engine** in your install by its in-game name; edit thrust, ISP (as a table),
   heat, and propellants.
 - **Add whole engine-config variants** — new B9PartSwitch subtypes with their own stats, fuel,
-  model elements (which meshes show/hide), and plume — generated correctly whether the engine
-  already switches configs or not.
-- **Edit & preview Waterfall plumes**, including **building one from a blank slate** — start
-  empty and add effects from a palette of Waterfall models/shaders, tune materials and
-  modifier curves, and see it render live.
-- **Preview per-variant plumes** in the 3D viewer before you ever launch KSP.
+  model elements (which meshes show/hide), visual scale, and plume — generated correctly
+  whether the engine already switches configs or not. Each variant is edited in its own
+  scoped panel (Engine / Model / Plume tabs) that mirrors the real config structure.
+- **Edit Waterfall plumes inline, on the engine** — the full effect editor (per-effect
+  on/off toggles, add-effect palette, materials, modifier curves) sits right in the variant
+  panel and renders live on the 3D model as you work. Mod templates are **forked
+  automatically and silently** the moment you edit one, so shipped plumes are never touched.
+- **Build a plume from a blank slate** — start empty and add effects from a palette of
+  Waterfall models/shaders harvested from your install. Hover any property for a plain-English
+  explanation of what it does.
+- **Give Waterfall to engines that don't have it** — a `ModuleWaterfallFX` is minted for you
+  (disabled on stock subtypes, so unmodified configs stay stock), with an attach-transform
+  picker that lists the part's real transforms and their counts — e.g. one plume on
+  `thrustTransform (×30)` lights an entire engine cluster.
+- **Propellant presets** — swap fuel mixtures from a list of every combination used in your
+  install, with its most common ratios.
+- **Share your work as plume packs** — export your custom plumes and engine variants to a zip,
+  import a friend's. Name collisions auto-rename, references remap, and variants for parts you
+  don't have are skipped with a reason. Nothing of yours is ever overwritten.
 - **Compile** everything to `GameData/zzzz_EngineEditor/` as `:FINAL` ModuleManager patches —
   lint-checked, so it refuses to emit broken configs.
 

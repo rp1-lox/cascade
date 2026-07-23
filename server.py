@@ -9,7 +9,7 @@ Endpoints:
   /                       static UI from ./web/
 No dependencies; index built in-memory at startup (~5 s).
 """
-import csv, io, json, os, sys, hashlib, urllib.parse
+import csv, io, json, os, sys, hashlib, urllib.parse, zipfile
 import socket
 import threading
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
@@ -398,6 +398,48 @@ def _propellants_from_node(mod_node):
             for p in _node_children(mod_node, 'PROPELLANT')]
 
 
+_PROPELLANT_PRESETS = None
+
+
+def propellant_presets():
+    """Aggregate distinct propellant combos across every engine in the install: for each
+    set of propellant names, the most common ratio combo and how many engines use it.
+    Data-derived (no hardcoded fuel list); computed once per server run."""
+    global _PROPELLANT_PRESETS
+    if _PROPELLANT_PRESETS is not None:
+        return _PROPELLANT_PRESETS
+    combos = {}   # names-tuple -> {ratio-tuple: count}
+    for e in ENGINES:
+        span = part_span.get(e['part'])
+        if not span:
+            continue
+        try:
+            _p, node = extract_block(span)
+        except Exception:
+            continue
+        for m in _node_children(node, 'MODULE'):
+            if _node_key(m, 'name') not in ('ModuleEnginesFX', 'ModuleEngines'):
+                continue
+            props = _propellants_from_node(m)
+            props = [p for p in props if p['name'] and p['name'] != 'ElectricCharge']
+            if not props:
+                continue
+            names = tuple(sorted(p['name'] for p in props))
+            ratios = tuple(p['ratio'] for p in sorted(props, key=lambda p: p['name']))
+            combos.setdefault(names, {}).setdefault(ratios, 0)
+            combos[names][ratios] += 1
+    out = []
+    for names, rc in combos.items():
+        ratios, _n = max(rc.items(), key=lambda kv: kv[1])
+        count = sum(rc.values())
+        out.append({'label': ' / '.join(names), 'count': count,
+                    'propellants': [{'name': n, 'ratio': r, 'DrawGauge': 'True'}
+                                    for n, r in zip(names, ratios)]})
+    out.sort(key=lambda p: -p['count'])
+    _PROPELLANT_PRESETS = out
+    return out
+
+
 def _engine_fields(mod_node, base=None):
     """Read engine stat fields (maxThrust/minThrust/heatProduction/ispCurve/propellants)
     directly from `mod_node`. Any field absent on `mod_node` falls back to the matching
@@ -424,6 +466,38 @@ def _override_data_node(ovmod):
     the module node itself if there's no DATA wrapper."""
     datas = _node_children(ovmod, 'DATA')
     return datas[0] if datas else ovmod
+
+
+def _model_root_transforms(part_name):
+    """The part model's top-level transform names (§8.3) — one per MODEL{} node, the name of
+    that model's root object, derived the same way the 3D viewer resolves the part's model
+    (get_model_data / modelcache). [] if unknown (no MODEL nodes, or none parse)."""
+    try:
+        data = get_model_data(part_name)
+    except Exception:
+        return []
+    roots = []
+    for m in data.get('models', []):
+        tree = m.get('tree')
+        if tree and tree.get('name') and tree['name'] not in roots:
+            roots.append(tree['name'])
+    return roots
+
+
+def _subtype_scale_offsets(sub):
+    """{transformName: num} parsed from a SUBTYPE's TRANSFORM{name=.. scaleOffset=..} children
+    (§8.3). Non-numeric/missing scaleOffset entries are skipped."""
+    out = {}
+    for t in _node_children(sub, 'TRANSFORM'):
+        nm = _node_key(t, 'name', '') or ''
+        sv = _node_key(t, 'scaleOffset')
+        if not nm or sv in (None, ''):
+            continue
+        try:
+            out[nm] = float(sv)
+        except ValueError:
+            continue
+    return out
 
 
 def engine_variant_info(part_name):
@@ -480,7 +554,7 @@ def engine_variant_info(part_name):
                 'maxThrust': base['maxThrust'], 'minThrust': base['minThrust'],
                 'heatProduction': base['heatProduction'], 'ispCurve': base['ispCurve'],
                 'propellants': base['propellants'], 'addedMass': '', 'addedCost': '',
-                'transforms': [],
+                'transforms': [], 'scaleOffsets': {},
                 'hasWfOverride': False, 'wfOverrideCount': 0,
                 'plume': dict(base_plume) if base_plume else None}]
 
@@ -511,6 +585,7 @@ def engine_variant_info(part_name):
                              'addedMass': _node_key(sub, 'addedMass', '') or '',
                              'addedCost': _node_key(sub, 'addedCost', '') or '',
                              'transforms': sub_transforms,
+                             'scaleOffsets': _subtype_scale_offsets(sub),
                              'hasWfOverride': bool(wf_ovs), 'wfOverrideCount': len(wf_ovs),
                              'plume': sub_plume})
 
@@ -518,7 +593,8 @@ def engine_variant_info(part_name):
             'engineB9': engine_b9, 'engineB9Count': engine_b9_count,
             'b9ModuleIDs': b9_ids, 'wfModuleID': wf_module_id, 'subtypes': subtypes,
             'transformPool': sorted(transform_pool),
-            'basePlume': base_plume}
+            'basePlume': base_plume,
+            'rootTransforms': _model_root_transforms(part_name)}
 
 
 print('Indexing ConfigCache ...')
@@ -728,6 +804,35 @@ class Handler(SimpleHTTPRequestHandler):
                                    'parentUrl': parent, 'node': node_to_json(node)})
         if url.path == '/api/plume/manifest':
             return self.send_json(plume_manifest.load())
+        if url.path == '/api/plume/export':
+            # §11.2: zip of one plumepack.json { format, exportedBy, templates{name:{base,tree}} }.
+            # names= empty/absent => all customs.
+            names_param = q.get('names', [''])[0]
+            manifest = plume_manifest.load()
+            if names_param.strip():
+                wanted = [n for n in names_param.split(',') if n.strip()]
+            else:
+                wanted = list(manifest['templates'].keys())
+            templates = {}
+            for n in wanted:
+                entry = manifest['templates'].get(n)
+                if entry:
+                    templates[n] = {'base': entry.get('base'), 'tree': entry['tree']}
+            # v2: packs also carry engine variants (user decision 2026-07-22). Variants are
+            # part-specific; import skips ones whose part isn't in the destination install.
+            pack = {'format': 'cascade-plumepack/2', 'exportedBy': '', 'templates': templates,
+                    'engineVariants': manifest.get('engineVariants', {})}
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr('plumepack.json', json.dumps(pack, indent=2))
+            data = buf.getvalue()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/zip')
+            self.send_header('Content-Disposition', 'attachment; filename=cascade-plumes.zip')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if url.path == '/api/plume/engine-info':
             name = q.get('part', [''])[0]
             if name not in part_span:
@@ -744,6 +849,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json(engine_variant_info(name))
         if url.path == '/api/variant/list':
             return self.send_json(plume_manifest.list_engine_variants())
+        if url.path == '/api/propellant-presets':
+            return self.send_json(propellant_presets())
         if url.path == '/api/plume/starters':
             try:
                 with open(STARTER_TEMPLATES_PATH, encoding='utf-8') as f:
@@ -898,6 +1005,114 @@ class Handler(SimpleHTTPRequestHandler):
             except plume_manifest.PlumeManifestError as ex:
                 return self.send_json({'error': str(ex)}, 400)
             return self.send_json(manifest)
+        if url.path == '/api/plume/import':
+            # §11.2: raw zip bytes body -> plumepack.json { format, templates{name:{base,tree}} }.
+            # Dedupe each template name, normalize its tree's templateName key to the final
+            # name, preserve base (baseMissing = provenance-only warning). Validate-all-then-
+            # save-once: never partially write on malformed input.
+            length = int(self.headers.get('Content-Length', 0))
+            raw = self.rfile.read(length)
+            try:
+                zbuf = io.BytesIO(raw)
+                with zipfile.ZipFile(zbuf) as zf:
+                    with zf.open('plumepack.json') as f:
+                        pack = json.load(f)
+            except Exception as ex:
+                return self.send_json({'error': 'bad plume pack (zip/json): ' + repr(ex)}, 400)
+            if pack.get('format') not in ('cascade-plumepack/1', 'cascade-plumepack/2'):
+                return self.send_json(
+                    {'error': 'unrecognized pack format %r' % (pack.get('format'),)}, 400)
+            templates_in = pack.get('templates')
+            if not isinstance(templates_in, dict):
+                return self.send_json({'error': 'malformed pack: missing templates object'}, 400)
+
+            mod_names = {t['templateName'] for t in TEMPLATES}
+            manifest = plume_manifest.load()
+            imported, skipped = [], []
+            for name, entry in templates_in.items():
+                if not isinstance(entry, dict) or not isinstance(entry.get('tree'), dict):
+                    skipped.append('%s: malformed entry' % (name,))
+                    continue
+                base = entry.get('base')
+                try:
+                    final_name = plume_manifest.dedupe_name(name, manifest, mod_names)
+                except plume_manifest.PlumeManifestError as ex:
+                    skipped.append('%s: %s' % (name, ex))
+                    continue
+                tree = json.loads(json.dumps(entry['tree']))
+                keys = tree.get('k') or []
+                found = False
+                for kv in keys:
+                    if kv and kv[0] == 'templateName':
+                        kv[1] = final_name
+                        found = True
+                if not found:
+                    keys.append(['templateName', final_name])
+                tree['k'] = keys
+                base_missing = bool(base) and base not in mod_names and base not in manifest['templates']
+                manifest['templates'][final_name] = {'base': base, 'tree': tree}
+                imported.append({'name': name, 'finalName': final_name, 'base': base,
+                                 'baseMissing': base_missing})
+            # v2: weave in engine variants. Skips: part not in this install (variant would be
+            # inert), or a same-named variant already present on that part (never clobber).
+            # Plume template refs are remapped through any renames done above.
+            rename = {i['name']: i['finalName'] for i in imported}
+            variants_imported, variants_skipped = [], []
+            for part, ev in (pack.get('engineVariants') or {}).items():
+                if not isinstance(ev, dict) or not isinstance(ev.get('subtypes'), list):
+                    variants_skipped.append('%s: malformed entry' % (part,))
+                    continue
+                if part not in part_span:
+                    variants_skipped.append('%s: part not in this install' % (part,))
+                    continue
+                dest = manifest.setdefault('engineVariants', {}).setdefault(
+                    part, {'b9ModuleID': ev.get('b9ModuleID'),
+                           'targetModule': ev.get('targetModule'), 'subtypes': []})
+                have = {s.get('name') for s in dest['subtypes']}
+                for s in ev['subtypes']:
+                    nm = s.get('name') or ''
+                    if not nm:
+                        variants_skipped.append('%s: unnamed subtype' % (part,))
+                        continue
+                    if nm in have:
+                        variants_skipped.append('%s / %s: variant already exists here' % (part, nm))
+                        continue
+                    s = json.loads(json.dumps(s))
+                    if s.get('plume') and s['plume'].get('template') in rename:
+                        s['plume']['template'] = rename[s['plume']['template']]
+                    dest['subtypes'].append(s)
+                    have.add(nm)
+                    variants_imported.append({'part': part, 'name': nm})
+                if not dest['subtypes']:
+                    del manifest['engineVariants'][part]
+            plume_manifest.save(manifest)
+            return self.send_json({'imported': imported, 'skipped': skipped,
+                                   'variantsImported': variants_imported,
+                                   'variantsSkipped': variants_skipped})
+        if url.path == '/api/plume/fork':
+            # §8.7 auto-fork: create a custom template copied from a mod OR custom base,
+            # deduping the name with a numeric suffix instead of erroring on collision.
+            length = int(self.headers.get('Content-Length', 0))
+            try:
+                body = json.loads(self.rfile.read(length) or b'{}')
+            except Exception as ex:
+                return self.send_json({'error': 'bad json body: ' + repr(ex)}, 400)
+            source = body.get('base', '')
+            desired = body.get('newName', '') or source
+            mod_names = {t['templateName'] for t in TEMPLATES}
+            manifest = plume_manifest.load()
+            if source in manifest['templates']:
+                source_tree = manifest['templates'][source]['tree']
+            elif source in template_span:
+                _parent, node = extract_block(template_span[source])
+                source_tree = node_to_json(node)
+            else:
+                return self.send_json({'error': 'unknown base template %r' % (source,)}, 404)
+            try:
+                actual_name, manifest = plume_manifest.fork(source, desired, source_tree, mod_names)
+            except plume_manifest.PlumeManifestError as ex:
+                return self.send_json({'error': str(ex)}, 400)
+            return self.send_json({'name': actual_name, 'manifest': manifest})
         if url.path in ('/api/variant/add', '/api/variant/remove'):
             length = int(self.headers.get('Content-Length', 0))
             try:

@@ -3,13 +3,18 @@
 <head>
 <meta charset="utf-8">
 <title>KSP Engine Editor</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=39">
 </head>
 <body>
 <div id="app">
   <aside id="sidebar">
     <header>
-      <h1>Engine Editor <a href="plumelib.html" style="float:right;font-size:11px;text-transform:none;letter-spacing:0;">Plume Library →</a></h1>
+      <h1>Engine Editor</h1>
+      <nav id="topnav">
+        <span class="navtab on">Engines</span>
+        <a class="navtab" href="plumelib.html">Plume Library</a>
+        <button id="btnCompile" class="ghost" title="Compile the manifest (custom plumes + engine variants) to GameData/zzzz_EngineEditor/">Compile / Apply →</button>
+      </nav>
       <input id="search" type="search" placeholder="Search engines…" autocomplete="off">
       <div id="filters">
         <select id="modFilter"><option value="">All mods</option></select>
@@ -18,6 +23,7 @@
         <label><input type="checkbox" id="fWarn"> ⚠</label>
         <label><input type="checkbox" id="fShowDeprecated"> Show deprecated</label>
       </div>
+      <div id="compileOut" class="hidden"></div>
     </header>
     <ul id="partList"></ul>
   </aside>
@@ -46,28 +52,16 @@
     <div id="saveMsg"></div>
   </div>
 </div>
-<!-- Inline plume editor drawer (mounts the shared PlumeEdit module on a variant's plume) -->
-<div id="plumeDrawer" class="hidden">
-  <div id="plumeDrawerResize" title="Drag to resize"></div>
-  <div id="plumeDrawerHead">
-    <span id="plumeDrawerTitle">Plume</span>
-    <span id="plumeDrawerSub"></span>
-    <span style="flex:1"></span>
-    <button id="plumeDrawerAdd" class="ghost">+ Add effect</button>
-    <button id="plumeDrawerSave">Save</button>
-    <button id="plumeDrawerClose" class="ghost">Close</button>
-  </div>
-  <div id="plumeDrawerStatus"></div>
-  <div id="plumeDrawerBody"></div>
-</div>
+<!-- §9.2: the drawer is gone — the plume editor now mounts inline in the variant panel's
+     Plume sub-tab (see mountPlumeReadonly()/mountPlumeEditable() in app.js). -->
 <!-- Custom dialog overlay (no native modals) reused from the shared editor -->
 <div id="eeOverlay"><div id="eeDialog"></div></div>
 <datalist id="eeControllerList">
   <option value="throttle"></option><option value="atmosphereDepth"></option><option value="random"></option>
 </datalist>
 <script src="model3d.js?v=11"></script>
-<script src="plume.js?v=16"></script>
-<script src="plumeedit.js?v=1"></script>
-<script src="app.js?v=22"></script>
+<script src="plume.js?v=18"></script>
+<script src="plumeedit.js?v=38"></script>
+<script src="app.js?v=39"></script>
 </body>
 </html>

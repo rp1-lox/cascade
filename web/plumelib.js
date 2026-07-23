@@ -77,6 +77,113 @@ const dAlert = (message, title) => openDialog({kind:'alert', title:title||'Notic
 const dConfirm = (message, title) => openDialog({kind:'confirm', title:title||'Confirm', message, okText:'Delete', cancelText:'Cancel'}).then(v=>v===true);
 
 // ============================================================================
+// Plume packs (§11): export a checkbox-selected set of custom plumes as a zip;
+// import a zip, weaving its templates in as ordinary customs (deduped by name).
+// ============================================================================
+async function exportPackFlow(){
+  const customs = TEMPLATES.filter(t=>t.source==='custom').sort((a,b)=>a.name.localeCompare(b.name));
+  if(!customs.length){ await dAlert('No custom plumes to export yet.', 'Export pack'); return; }
+  const ov=$('#eeOverlay'), box=$('#eeDialog'); box.innerHTML='';
+  const h=document.createElement('h3'); h.textContent='Export pack'; box.appendChild(h);
+  const msg=document.createElement('div'); msg.className='eeMsg';
+  msg.textContent='Choose which custom plumes to include:'; box.appendChild(msg);
+  const listEl=document.createElement('div'); listEl.className='eeList';
+  const checks=[];
+  customs.forEach(t=>{
+    const row=document.createElement('div');
+    row.style.cssText='display:flex;gap:8px;align-items:center;cursor:pointer;';
+    const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=true; cb.dataset.name=t.name;
+    const lbl=document.createElement('span'); lbl.textContent=t.name; lbl.style.fontFamily='var(--mono)';
+    row.appendChild(cb); row.appendChild(lbl);
+    row.addEventListener('click', e=>{ if(e.target!==cb) cb.checked=!cb.checked; });
+    listEl.appendChild(row); checks.push(cb);
+  });
+  box.appendChild(listEl);
+  const btns=document.createElement('div'); btns.className='eeBtns';
+  const cancel=document.createElement('button'); cancel.className='btn'; cancel.textContent='Cancel';
+  const ok=document.createElement('button'); ok.className='btn primary'; ok.textContent='Export';
+  btns.appendChild(cancel); btns.appendChild(ok); box.appendChild(btns);
+  ov.classList.add('show');
+  await new Promise(resolve=>{
+    function close(){ ov.classList.remove('show'); resolve(); }
+    cancel.addEventListener('click', close);
+    ok.addEventListener('click', ()=>{
+      const names = checks.filter(c=>c.checked).map(c=>c.dataset.name);
+      close();
+      if(!names.length) return;
+      const a=document.createElement('a');
+      a.href='/api/plume/export?names='+encodeURIComponent(names.join(','));
+      a.download='cascade-plumes.zip';
+      document.body.appendChild(a); a.click(); a.remove();
+    });
+  });
+}
+
+async function importPackFlow(e){
+  const file = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if(!file) return;
+  const buf = await file.arrayBuffer();
+  let data;
+  try {
+    const resp = await fetch('/api/plume/import', {method:'POST', body:buf});
+    data = await resp.json();
+  } catch(ex){ await dAlert('Import failed: '+ex.message, 'Import pack'); return; }
+  if(data.error){ await dAlert('Import failed: '+data.error, 'Import pack'); return; }
+  showImportSummary(data);
+  await loadList();
+}
+
+function showImportSummary(data){
+  const imported = data.imported||[], skipped = data.skipped||[];
+  const ov=$('#eeOverlay'), box=$('#eeDialog'); box.innerHTML='';
+  const h=document.createElement('h3'); h.textContent='Import result'; box.appendChild(h);
+  const wrap=document.createElement('div'); wrap.className='eeMsg';
+  const summary=document.createElement('div');
+  summary.textContent = imported.length+' imported'+(skipped.length?', '+skipped.length+' skipped':'')+'.';
+  wrap.appendChild(summary);
+  imported.forEach(it=>{
+    const row=document.createElement('div'); row.style.cssText='margin-top:6px;font-family:var(--mono);font-size:11.5px;';
+    row.textContent = (it.name===it.finalName ? it.finalName : (it.name+' → '+it.finalName));
+    if(it.baseMissing){
+      const w=document.createElement('span');
+      w.style.cssText='color:var(--warn);margin-left:8px;font-family:var(--font,inherit);';
+      w.textContent='(base "'+it.base+'" not found — imported as self-contained)';
+      row.appendChild(w);
+    }
+    wrap.appendChild(row);
+  });
+  skipped.forEach(s=>{
+    const row=document.createElement('div');
+    row.style.cssText='margin-top:6px;color:var(--err);font-size:11.5px;';
+    row.textContent='skipped: '+s;
+    wrap.appendChild(row);
+  });
+  // v2 packs: engine variants woven in alongside the plumes
+  const vi = data.variantsImported||[], vs = data.variantsSkipped||[];
+  if (vi.length || vs.length) {
+    const vh=document.createElement('div');
+    vh.style.cssText='margin-top:10px;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--accent);';
+    vh.textContent='Engine variants'; wrap.appendChild(vh);
+    vi.forEach(v=>{
+      const row=document.createElement('div'); row.style.cssText='margin-top:4px;font-family:var(--mono);font-size:11.5px;';
+      row.textContent = v.part+' / '+v.name; wrap.appendChild(row);
+    });
+    vs.forEach(s=>{
+      const row=document.createElement('div');
+      row.style.cssText='margin-top:4px;color:var(--warn);font-size:11.5px;';
+      row.textContent='skipped: '+s; wrap.appendChild(row);
+    });
+  }
+  box.appendChild(wrap);
+  const btns=document.createElement('div'); btns.className='eeBtns';
+  const ok=document.createElement('button'); ok.className='btn primary'; ok.textContent='OK';
+  ok.addEventListener('click', ()=>ov.classList.remove('show'));
+  btns.appendChild(ok); box.appendChild(btns);
+  ov.classList.add('show');
+}
+
+// ============================================================================
 // Boot
 // ============================================================================
 async function boot(){
@@ -107,6 +214,9 @@ async function boot(){
     if(MOUNTED) PlumeRenderer.setController('atmosphereDepth', controllers.atmosphereDepth);
   });
   $('#plExport').addEventListener('click', toggleExport);
+  $('#plExportPack').addEventListener('click', exportPackFlow);
+  $('#plImportPack').addEventListener('click', ()=>$('#plImportFile').click());
+  $('#plImportFile').addEventListener('change', importPackFlow);
   $('#plBloom').addEventListener('input', e=>{
     $('#plBloomV').textContent=(+e.target.value).toFixed(2);
     if(MOUNTED) PlumeRenderer.setBloomStrength(+e.target.value);

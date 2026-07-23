@@ -71,12 +71,17 @@
     const head = el('div', 'effHead');
     const toggle = el('div', 'effToggle' + (isDisabled(eff) ? '' : ' on'));
     toggle.title = isDisabled(eff) ? 'Disabled — click to enable' : 'Enabled — click to disable';
-    toggle.addEventListener('click', e => {
-      e.stopPropagation();
-      setDisabled(eff, !isDisabled(eff));
-      ctx.onChange && ctx.onChange();
-      rebuild(ctx);
-    });
+    if (ctx.editable) {
+      toggle.addEventListener('click', e => {
+        e.stopPropagation();
+        setDisabled(eff, !isDisabled(eff));
+        ctx.onChange && ctx.onChange();
+        rebuild(ctx);
+      });
+    } else {
+      toggle.classList.add('ro');
+      toggle.title = 'Read-only — add a variant to customize this plume';
+    }
     const nm = el('span', 'effName', kvOf(eff, 'name') || ('effect ' + idx));
     const sm = el('span', 'effSummary', effSummary(eff));
     const actions = el('div', 'effActions');
@@ -253,10 +258,78 @@
     return row;
   }
 
+  // What each Waterfall material property does — shown as a hover tooltip on the row
+  // label (dotted underline). Compiled from Waterfall's shader sources + template docs.
+  const PROP_HELP = {
+    _StartTint: 'Color at the nozzle end of the plume (multiplied with the texture).',
+    _EndTint: 'Color at the far/tail end; the plume blends StartTint → EndTint along its length.',
+    _TintFalloff: 'How quickly StartTint gives way to EndTint — higher = the start color hugs the nozzle.',
+    _Falloff: 'Radial brightness falloff — higher = brightness concentrates toward the plume core.',
+    _FalloffStart: 'Distance along the plume before Falloff starts applying.',
+    _Fresnel: 'Edge fade at glancing view angles — higher = softer silhouette edges.',
+    _FresnelInvert: 'Reverses Fresnel: brightens edges instead of fading them (shock-diamond looks).',
+    _FresnelFadeIn: 'Distance before the Fresnel edge effect reaches full strength.',
+    _Noise: 'Strength of the scrolling noise texture — adds flame turbulence/detail.',
+    _NoiseFresnel: 'Extra noise applied at silhouette edges only.',
+    _Brightness: 'Overall emission multiplier for this effect (HDR — values well above 1 are normal).',
+    _SpeedX: 'Texture scroll speed around the plume (swirl).',
+    _SpeedY: 'Texture scroll speed along the plume — the “exhaust rushing out” motion.',
+    _TileX: 'Texture repeats around the circumference.',
+    _TileY: 'Texture repeats along the length.',
+    _DirAdjust: 'View-direction compensation — how much the effect fades when seen edge-on.',
+    _ExpandLinear: 'Widens the mesh linearly along its length (positive = cone opens).',
+    _ExpandSquare: 'Widens quadratically toward the tail — bell/underexpanded looks.',
+    _ExpandBounded: 'Expansion with a clamp — widens then holds.',
+    _ExpandOffset: 'Uniform radius offset added to the whole mesh.',
+    _FadeIn: 'Fraction of the length that fades in from transparent at the nozzle.',
+    _FadeOut: 'Fraction at the tail that fades back out to transparent.',
+    _Seed: 'Random seed offsetting the noise pattern (differentiates stacked effects).',
+    _Symmetry: 'Number of symmetric noise lobes around the axis (0 = free-form).',
+    _SymmetryStrength: 'How strongly the symmetric lobes override the raw noise.',
+    _DistortionStrength: 'Screen-space refraction strength (heat-haze shaders).',
+    _Blur: 'Softens the sampled texture.',
+    _Clip: 'Alpha cutoff — pixels dimmer than this are discarded (hard flame edges).',
+    _ClipSharpness: 'How abrupt the Clip cutoff is.',
+    _LengthWidth: 'Aspect control for billboard flares: length vs width.',
+    _Frequency: 'Flicker/pulse frequency for animated shaders.',
+    _Direction: 'Axis (object space) the shader treats as “along the plume”.',
+  };
+  // Custom in-page tooltip — native title tooltips get dismissed by the viewer's
+  // render/animation loop after a beat, so we own the hover bubble ourselves.
+  let TIP = null;
+  function showTip(target, text) {
+    if (!TIP) {
+      TIP = el('div', 'eetip');
+      document.body.appendChild(TIP);
+    }
+    TIP.textContent = text;
+    const r = target.getBoundingClientRect();
+    TIP.style.display = 'block';
+    // measure after display so width is real; clamp to viewport
+    const tw = TIP.offsetWidth, th = TIP.offsetHeight;
+    let x = r.left, y = r.top - th - 6;
+    if (y < 4) y = r.bottom + 6;
+    if (x + tw > window.innerWidth - 8) x = window.innerWidth - tw - 8;
+    TIP.style.left = x + 'px';
+    TIP.style.top = y + 'px';
+  }
+  function hideTip() { if (TIP) TIP.style.display = 'none'; }
+
+  function helpLabel(name) {
+    const l = el('label', null, name);
+    const h = PROP_HELP[name];
+    if (h) {
+      l.classList.add('haship');
+      l.addEventListener('mouseenter', () => showTip(l, h));
+      l.addEventListener('mouseleave', hideTip);
+    }
+    return l;
+  }
+
   function floatRow(node, ctx) {
     const name = kvOf(node, 'floatName'); const val = parseFloat(kvOf(node, 'value')) || 0;
     const rng = (ctx.params || {})[name] || { min: 0, max: 10 };
-    const row = el('div', 'prow'); row.appendChild(el('label', null, name));
+    const row = el('div', 'prow'); row.appendChild(helpLabel(name));
     const num = el('input'); num.type = 'number'; num.step = '0.01'; num.value = val;
     const rg = el('input'); rg.type = 'range'; rg.min = rng.min; rg.max = rng.max; rg.step = (rng.max - rng.min) / 500 || 0.01; rg.value = val;
     if (!ctx.editable) { num.disabled = true; rg.disabled = true; }
@@ -268,7 +341,7 @@
 
   function colorRow(node, ctx) {
     const name = kvOf(node, 'colorName'); const parts = (kvOf(node, 'colorValue') || '1,1,1,1').split(',').map(parseFloat);
-    const row = el('div', 'prow'); row.appendChild(el('label', null, name));
+    const row = el('div', 'prow'); row.appendChild(helpLabel(name));
     const cp = el('input'); cp.type = 'color';
     const to255 = v => Math.max(0, Math.min(255, Math.round(v * 255)));
     cp.value = '#' + [0, 1, 2].map(i => to255(parts[i]).toString(16).padStart(2, '0')).join('');

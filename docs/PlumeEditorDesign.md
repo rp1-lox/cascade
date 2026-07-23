@@ -593,3 +593,182 @@ and for the +SUBTYPE path copyFrom `wfOverrideCount <= 1` (else refuse: ambiguou
 - attach offset inputs (overrideParentTransform, position, rotation, scale) shown when a template is chosen,
   prefilled from the copy-from subtype's `plume` attach; re-prefilled when copy-from changes;
 - Save payload `subtype.plume = template ? {template, overrideParentTransform, position, rotation, scale} : null`.
+
+
+## 8. Variant-scoped layout v2 + per-variant model scale + integrated plume search (2026-07-22)
+
+### 8.1 Research: per-variant part scale
+`rescaleFactor` / part `scale` are PART-level compile-time fields — B9PS **cannot** switch them.
+What B9PS DOES support per-subtype: `TRANSFORM { name = <t> positionOffset / rotationOffset /
+scaleOffset }` (widely used in this install: 4165 `scaleOffset` occurrences in ConfigCache, e.g.
+StarshipLaunchExpansion engine shields). So per-variant scale = emit a `TRANSFORM` block with
+`scaleOffset` per model root transform. Limitations to surface in the UI: attach nodes, colliders
+behave per B9PS semantics (mesh children scale; node positions do NOT move) — label it "Model scale
+(visual)".
+
+### 8.2 Manifest schema (§7.2 subtype) additions
+- `"modelScale": "<num-str>" | ""` — empty ⇒ no TRANSFORM scale blocks. Uniform scale only (one number).
+- `_clean_variant_subtype` normalizes (numeric string or '').
+
+### 8.3 Extraction additions (`engine_variant_info`)
+- top-level `rootTransforms: [ ... ]` — the part model's top-level transform name(s), derived the same
+  way the 3D viewer resolves the model (modelcache); `[]` if unknown.
+- each shipped `subtypes[]` entry gains `scaleOffsets: { <transformName>: <num> }` (parsed from its
+  TRANSFORM blocks; usually empty) so copy-from can prefill.
+
+### 8.4 Generation (`engine_variant_cfg`)
+If `modelScale` non-empty and `ctx.rootTransforms` non-empty: per root transform emit inside the
+SUBTYPE body:
+```
+TRANSFORM { name = <root>  scaleOffset = <modelScale> }
+```
++SUBTYPE (copy-from) path: prefix with `!TRANSFORM,* {}` ONLY when copy-from itself had TRANSFORM
+blocks (from `scaleOffsets`), so we replace rather than stack. Mint path: plain blocks.
+Lint: `modelScale` numeric and > 0; if set but `rootTransforms` empty ⇒ refuse ("model root unknown").
+
+### 8.5 Layout v2 (app.js) — variant-scoped everything
+- The variant tab strip stays at top. EVERYTHING below it lives in ONE bordered panel headed
+  `Variant: <activeTabName>` (`.variant-scope`), so it reads like the real config: tab = subtype,
+  panel = that subtype's resolved config. Part-level info (part title, model, non-engine switches)
+  stays ABOVE/OUTSIDE the panel.
+- The panel shows for the ACTIVE tab: stats table, propellants, model elements, **and a "Plume" row**
+  naming the template that subtype resolves to (`subtypes[].plume.template` or basePlume) with source
+  badge (mod / custom / inherited). This answers "which plume goes with this variant" at a glance.
+  The 3D preview already follows the tab (VARIANT_PREVIEW) — keep that wired.
+- Editing any field in the panel affects ONLY the active EE-added variant (shipped subtypes stay
+  read-only; their tabs just drive B9PS + preview). Read-only cells get a muted style, not inputs.
+
+### 8.6 Integrated plume search (replaces the bare datalist)
+A `.plume-picker` popover (custom in-page UI, no native dialogs): a search input + grouped result list
+(Custom / Mod templates), filter-as-you-type on template name AND source mod name; each row shows name,
+source badge, and (for customs) base template. Arrow keys + Enter select; Esc closes. Used in the
+variant form AND anywhere else a template is picked. Data: `/api/plume/list` + `/api/templates`.
+
+### 8.7 Auto-fork inline editing (drawer)
+From the variant panel's Plume row: an `Edit plume ✎` button that NEVER leaves the page:
+- if the variant's template is already a CUSTOM template → open the existing §10 drawer on it directly;
+- if it's a MOD template (or inherited) → **auto-fork**: create a custom copy named
+  `<part>_<variantName>` (dedupe with numeric suffix via existing validate_name), assign it as the
+  variant's `plume.template`, then open the drawer on the fork. One click: fork + assign + edit.
+- Drawer saves keep updating the live on-engine preview (inlineTree path) — the plume must visibly
+  change on the engine as it is edited. The Library page remains for standalone plume work.
+
+
+## 9. Engine-editor-first: inline plume editor, silent fork, sub-tabs (user decisions 2026-07-22)
+
+Supersedes the §8.7 drawer as the PRIMARY editing surface (the drawer code may be removed or reused as
+the inline mount; do not keep two divergent editors). User verdict on §8 delivery: works, layout wrong.
+
+### 9.1 Variant panel gets sub-tabs: Engine / Model / Plume
+Inside `.variant-scope`, a small tab row replaces the flat scroll:
+- **Engine**: stats table (thrust/min/heat), ISP curve table, propellants.
+- **Model**: model elements (transform checkboxes), Model scale (visual).
+- **Plume**: the plume section (9.2).
+Shipped subtypes: same sub-tabs, read-only content. The old separate "Engines" and "Waterfall" config
+sections MOVE INTO this panel (they no longer render as standalone sections below it — the variant
+panel with sub-tabs IS the config UI now). Part-level-only info (part title, description, non-engine
+switches) stays outside as before.
+
+### 9.2 Inline plume editor (replaces the drawer as primary)
+The Plume sub-tab shows: template name + source badge + search picker (§8.6) + the FULL Library-style
+editor (PlumeEdit module: effect toggles, add-effect palette, accordion, materials, curves — literal
+parity, same markup/CSS as the Library page) expanded IN PLACE in the panel. No overlay/drawer.
+Live on-engine preview via the existing inlineTree path while editing. Same editor mount for the
+Library page and here — one PlumeEdit, two mounts (this was the original plumeedit.js design goal).
+
+### 9.3 Silent auto-fork with badge
+When the user modifies ANY plume edit control while the variant's template is a mod/inherited one:
+- fork immediately + quietly via /api/plume/fork (name `<part>_<variant>`, deduped), assign to the
+  variant, apply the pending edit to the fork — NO status text, NO interruption.
+- the plume row/template field updates to the fork name at once, plus a small `customized` badge
+  (`.srcbadge.customized`) so the fork is visible at a glance. Editing a template that is already
+  custom never re-forks.
+- Read-only shipped subtypes: plume sub-tab content is read-only; no fork-on-edit (controls disabled).
+
+### 9.4 Engine editor is the app
+- Landing page = engine editor. The Plume Library becomes a secondary tab (top-level nav: Engines |
+  Plume Library | Manager if one exists — collapse Manager INTO the engine editor header if it's
+  only compile/apply).
+- **Compile / Apply to GameData** button in the engine editor header (same endpoint the Manager used),
+  with its result/lint output shown in-page (custom UI, no native dialogs).
+
+
+## 10. Waterfall for engines WITHOUT it (mint) + attach-transform picker (2026-07-22)
+
+Motivating part: `libra_lv_engine_s7p5_1` (TantaresLV N1 block, 7.5m cluster) — 30 `thrustTransform`s
+in the .mu, NO ModuleWaterfallFX, has a non-engine B9PS (b9=1). User goal: add custom plumes to it.
+
+### 10.1 Mint a ModuleWaterfallFX when the part has none
+When a variant sets a plume and `ctx.wfModuleID` is empty, `engine_variant_cfg` additionally emits a
+part-level module (once per part, not per variant), before the B9PS section:
+```
+MODULE
+{
+  name = ModuleWaterfallFX
+  moduleID = eeWaterfall
+  CONTROLLER { name = atmosphereDepth  linkedTo = atmosphere_density }
+  CONTROLLER { name = throttle         linkedTo = throttle }
+  CONTROLLER { name = random           linkedTo = random  range = -1,1 }
+  TEMPLATE { templateName = <first plume-carrying variant's template> + its attach }
+}
+```
+- Per-variant plumes then target `wf = eeWaterfall` with the usual `_subtype_edit_block`
+  (has_override=False — the copied/minted subtypes have no WF override).
+- Subtypes WITHOUT a plume (incl. the minted `Stock`) must not show the base plume: emit inside them
+  `MODULE { IDENTIFIER { name = ModuleWaterfallFX  moduleID = eeWaterfall }  moduleActive = false }`
+  (B9PS's module enable/disable — verify the exact key against B9PS docs/real usage in ConfigCache;
+  if real-world usage differs, follow the real-world form). For the existing-B9PS path, also patch
+  each SHIPPED subtype with the same moduleActive=false block via `@SUBTYPE[<name>]` edits so stock
+  configs stay visually stock.
+- Lint additions: minted WF only when ≥1 variant has a plume; `eeWaterfall` must not collide with
+  existing moduleIDs; refuse plume variants on parts with no engine module as before.
+- Manifest: no schema change (wfModuleID stays derived). Extraction: `engine_variant_info` returns
+  `wfModuleID: ""` as today; frontend uses `eeWaterfall` as the implied target when empty.
+- Frontend: the variant form's Plume tab must WORK when `info.wfModuleID` is empty (today it's
+  disabled with "no Waterfall module" note): allow template pick + inline editor; live preview must
+  render the template on the model even though `waterfallModules()` finds none — updatePlumes gains a
+  synthetic-module path driven by VARIANT_PREVIEW when the part tree has no ModuleWaterfallFX.
+  Default attach transform: the most-common thrust-like transform name in the model (see 10.2).
+
+### 10.2a (see §11 below for plume packs)
+
+### 10.2 Attach-transform picker
+Wherever `overrideParentTransform` / "Attach to transform" is edited (variant form, §7.10 attach
+fields), replace the bare text input with a text input + datalist (or small picker) listing the
+part model's transform names from `/api/model`, annotated with match counts —
+e.g. `thrustTransform (×30)`. Keep free-text entry allowed. Data via the existing
+computeAllTransforms map (client-side); no new endpoint required.
+
+
+## 11. Plume packs — share/import custom plumes as a zip (2026-07-22)
+
+Goal: a friend can send you their custom plumes; importing "weaves" them into every template
+picker as ordinary custom templates. Stdlib only.
+
+### 11.1 Pack format
+Zip containing `plumepack.json`:
+```
+{ "format": "cascade-plumepack/1",
+  "exportedBy": "<free-text, optional>",
+  "templates": { "<name>": { "base": "<source template or null>", "tree": {h,k,c} }, ... } }
+```
+Exactly the manifest's `templates` sub-structure (tree = full EFFECTTEMPLATE). No engineVariants
+in v1 (they're part-specific; plumes are portable).
+
+### 11.2 Server endpoints
+- `GET /api/plume/export?names=a,b,c` (empty names ⇒ all customs) → application/zip download
+  (`Content-Disposition: attachment; filename=cascade-plumes.zip`), built in-memory (io.BytesIO+zipfile).
+- `POST /api/plume/import` (body: raw zip bytes) → parse, validate format string, then per template:
+  dedupe name via the existing dedupe_name (imported `foo` collides ⇒ `foo_2`), normalize the tree's
+  templateName key to the final name, preserve `base`. Returns
+  `{imported: [{name, finalName, base, baseMissing:bool}], skipped: [..reasons..]}` where baseMissing
+  = base is non-null and not in (mod templates ∪ customs) — template still imports (it is
+  self-contained; base is provenance only) but the UI shows a warning badge.
+- Malformed zip/json ⇒ 400 with a clear error; never partially write (validate all, then save once).
+
+### 11.3 UI (Library page header + engine editor reachable via Library)
+- "Export pack" button: multi-select of custom templates (checkbox list, custom in-page UI;
+  default all) → triggers the zip download via a plain <a download> navigation.
+- "Import pack" button: <input type=file accept=.zip> (hidden, triggered by the button) → POST →
+  in-page summary: N imported (renames listed as `foo → foo_2`), baseMissing warnings. Pickers/caches
+  refresh (invalidatePlumeListCache + list reload) so imported plumes appear immediately everywhere.

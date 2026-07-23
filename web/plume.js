@@ -225,6 +225,29 @@ window.PlumeRenderer = (function () {
       vec4 wp = sk * vec4(pos,1.0);
       vWorldPos = wp.xyz;
       vWorldNormal = normalize(mat3(sk) * nrm);
+      // ROOT CAUSE of "renders invisible everywhere" for bone-rigged FX (e.g.
+      // fx-complex-plume-1 / fx-simple-shock-1, used by waterfall-hydrolox-lower-1's
+      // outerGlow/shock01-03): vPlumePos above (arg = -dot(pos,axis) in OBJECT/BIND
+      // space) assumes the mesh's own pre-skin local coordinate directly encodes
+      // "distance along the exhaust" — true for simple static meshes like fx-cylinder
+      // (verified working, kerolox-lower-1), but meaningless once SCALEMODIFIER/
+      // POSITIONMODIFIER reshape the skeleton: these bone rigs' bind mesh spans
+      // local Z in [0, +few] (all one sign), so arg=-dot(pos,(0,0,1)) is negative
+      // over virtually the entire mesh. FRAG's fadeIn term
+      // (fade *= smoothstep(0.0, max(uFadeIn,1e-5), vPlumePos)) then hard-zeros
+      // every fragment whenever uFadeIn is left at its default 0 (true for every
+      // modifier in this template — nothing sets _FadeIn/_FadeOut on these effects),
+      // making the whole draw fully transparent even though geometry/position/normals
+      // and every material uniform are otherwise correct (confirmed by temporarily
+      // forcing a solid debug color through the same draw calls — the mesh appears
+      // exactly where expected). Bone-deformed local coordinates can't drive a
+      // meaningful "progress along the plume" value, so skip that masking for skinned
+      // draws by feeding a neutral pass-through: 0.5 clears the fadeIn smoothstep's
+      // threshold (needs >= ~0) without tripping the fadeOut falloff further down
+      // (needs <= 1-fadeOut), matching "no fade in/out configured" — the correct
+      // behavior for every stock template's bone-rigged effect layers, none of which
+      // author FadeIn/FadeOut modifiers.
+      vPlumePos = 0.5;
       gl_Position = uProj * uView * wp;
       return;
     }
@@ -252,7 +275,6 @@ window.PlumeRenderer = (function () {
   uniform float uSeed, uSpeedX, uSpeedY, uTileX, uTileY;
   uniform int uToneMap;   // 0 = raw HDR output (fed into a float FBO / bloom pass),
                            // 1 = in-shader Reinhard tonemap (soft-knee rolloff for LDR targets)
-
   const float PI = 3.1415926535;
 
   vec3 toneMap(vec3 c){

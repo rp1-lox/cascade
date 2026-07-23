@@ -79,6 +79,35 @@ def clone(source_name, new_name, source_tree, mod_template_names):
     return manifest
 
 
+def dedupe_name(desired_name, manifest, mod_template_names):
+    """Return `desired_name`, or `<desired_name>_2`, `_3`, … — the first that passes
+    validate_name (docs/PlumeEditorDesign.md §8.7 fork-endpoint dedupe)."""
+    try:
+        validate_name(desired_name, manifest, mod_template_names)
+        return desired_name
+    except PlumeManifestError:
+        pass
+    n = 2
+    while True:
+        candidate = '%s_%d' % (desired_name, n)
+        try:
+            validate_name(candidate, manifest, mod_template_names)
+            return candidate
+        except PlumeManifestError:
+            n += 1
+
+
+def fork(source_name, desired_name, source_tree, mod_template_names):
+    """Like `clone`, but dedupes `desired_name` with a numeric suffix instead of erroring on
+    a name collision (docs/PlumeEditorDesign.md §8.7). Returns (actual_name, manifest)."""
+    manifest = load()
+    actual_name = dedupe_name(desired_name or source_name, manifest, mod_template_names)
+    tree = json.loads(json.dumps(source_tree))
+    manifest['templates'][actual_name] = {'base': source_name, 'tree': tree}
+    save(manifest)
+    return actual_name, manifest
+
+
 def create_blank(new_name, mod_template_names):
     """Create an empty EFFECTTEMPLATE (no EFFECT children) — a from-scratch plume. Returns manifest."""
     manifest = load()
@@ -372,6 +401,9 @@ def _clean_variant_subtype(subtype):
         clean_transforms = None
     else:
         clean_transforms = [t.strip() for t in transforms_in if isinstance(t, str) and t.strip()]
+    # modelScale: numeric string or '' (§8.2). Backward compat: absent key => ''.
+    model_scale = subtype.get('modelScale', '')
+    model_scale = str(model_scale).strip() if model_scale not in (None, '') else ''
     return {
         'name': name,
         'title': subtype.get('title', '') or '',
@@ -382,6 +414,7 @@ def _clean_variant_subtype(subtype):
         'propellants': clean_props,
         'plume': clean_plume,
         'transforms': clean_transforms,
+        'modelScale': model_scale,
     }
 
 

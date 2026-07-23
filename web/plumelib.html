@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>KSP Plume Library</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=39">
 <style>
   #plApp { display:flex; height:100vh; }
   #plList { width:320px; min-width:320px; display:flex; flex-direction:column;
@@ -139,7 +139,10 @@
       <button id="plSave" class="btn" style="display:none;">Save</button>
       <button id="plAssign" class="btn" style="display:none;">Assign to engine…</button>
       <button id="plCompile" class="btn primary">Compile / Apply to GameData</button>
-      <button id="plExport" class="btn" style="margin-left:auto;">Export as TEMPLATE cfg</button>
+      <button id="plExportPack" class="btn" style="margin-left:auto;">Export pack</button>
+      <button id="plImportPack" class="btn">Import pack</button>
+      <input id="plImportFile" type="file" accept=".zip" style="display:none;">
+      <button id="plExport" class="btn">Export as TEMPLATE cfg</button>
     </div>
     <div id="plView">
       <div id="plCanvasWrap"></div>
@@ -170,8 +173,8 @@
   <option value="atmosphereDepth"></option>
   <option value="random"></option>
 </datalist>
-<script src="plume.js?v=16"></script>
-<script src="plumeedit.js?v=1"></script>
-<script src="plumelib.js?v=13"></script>
+<script src="plume.js?v=18"></script>
+<script src="plumeedit.js?v=38"></script>
+<script src="plumelib.js?v=16"></script>
 </body>
 </html>

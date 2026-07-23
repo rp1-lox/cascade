@@ -26,6 +26,8 @@ ENGINE_PREFIX = 'ee_plume_'
 SWITCH_MODULE_ID = 'eePlumeSwitch'
 VARIANT_PREFIX = 'ee_variant_'
 ENGINE_SWITCH_MODULE_ID = 'eeEngineSwitch'
+# §10.1 — the ModuleWaterfallFX we mint for engines that ship without one.
+MINT_WF_MODULE_ID = 'eeWaterfall'
 
 
 class CompileError(Exception):
@@ -296,14 +298,92 @@ def _engine_data_module(eng_mod, fields, propellants, has_override, indent):
     return L
 
 
+def _scale_transform_blocks(model_scale, root_transforms, indent):
+    """TRANSFORM { name = <root> scaleOffset = <modelScale> } per root transform (§8.4)."""
+    pad = '  ' * indent
+    L = []
+    for root in root_transforms:
+        L.append(pad + 'TRANSFORM')
+        L.append(pad + '{')
+        L.append(pad + '  name = %s' % root)
+        L.append(pad + '  scaleOffset = %s' % model_scale)
+        L.append(pad + '}')
+    return L
+
+
+def _minted_wf_module(plume, indent):
+    """§10.1 — a part-level ModuleWaterfallFX (moduleID=eeWaterfall) minted for engines that ship
+    with no Waterfall module. Seeded with the first plume-carrying variant's TEMPLATE + attach so
+    the module has a valid default; per-subtype B9PS overrides then swap/disable it."""
+    pad = '  ' * indent
+    L = [
+        pad + 'MODULE',
+        pad + '{',
+        pad + '  name = ModuleWaterfallFX',
+        pad + '  moduleID = %s' % MINT_WF_MODULE_ID,
+        pad + '  CONTROLLER',
+        pad + '  {',
+        pad + '    name = atmosphereDepth',
+        pad + '    linkedTo = atmosphere_density',
+        pad + '  }',
+        pad + '  CONTROLLER',
+        pad + '  {',
+        pad + '    name = throttle',
+        pad + '    linkedTo = throttle',
+        pad + '  }',
+        pad + '  CONTROLLER',
+        pad + '  {',
+        pad + '    name = random',
+        pad + '    linkedTo = random',
+        pad + '    range = -1,1',
+        pad + '  }',
+    ]
+    L += _template_block(plume, indent + 1)
+    L.append(pad + '}')
+    return L
+
+
+def _wf_disable_block(wf_id, indent):
+    """§10.1 — B9PS module enable/disable: turn OFF the (minted) ModuleWaterfallFX inside a subtype
+    so stock/plumeless subtypes don't show the seeded default plume. Verified real-world form
+    (ModuleManager.ConfigCache): `MODULE { moduleActive = false  IDENTIFIER { name=..  moduleID=.. } }`."""
+    pad = '  ' * indent
+    return [
+        pad + 'MODULE',
+        pad + '{',
+        pad + '  moduleActive = false',
+        pad + '  IDENTIFIER',
+        pad + '  {',
+        pad + '    name = ModuleWaterfallFX',
+        pad + '    moduleID = %s' % wf_id,
+        pad + '  }',
+        pad + '}',
+    ]
+
+
 def engine_variant_cfg(part, ev, ctx):
     """A single @PART[…]:FINAL block adding full engine-config B9PS subtypes (§7.6). Each subtype
     either `+SUBTYPE`s into the part's existing engine-aspect B9PS (b9ModuleID set AND copyFrom
-    non-null) or is minted into a fresh `eeEngineSwitch` B9PS (b9ModuleID null OR copyFrom null)."""
+    non-null) or is minted into a fresh `eeEngineSwitch` B9PS (b9ModuleID null OR copyFrom null).
+
+    §10.1: when the part ships NO ModuleWaterfallFX (ctx.wfModuleID empty) but ≥1 variant sets a
+    plume, mint a part-level ModuleWaterfallFX (moduleID=eeWaterfall) seeded with the first
+    plume-carrying variant's template; plumeless/stock subtypes disable it (moduleActive=false)."""
     ctx = ctx or {}
     target = ev.get('targetModule') or ctx.get('targetModule') or 'ModuleEnginesFX'
     b9 = ev.get('b9ModuleID')
     wf = ctx.get('wfModuleID', '') or ''
+    mint_wf = not wf
+    if mint_wf:
+        wf = MINT_WF_MODULE_ID
+    # first plume-carrying variant (in declared order) seeds the minted WF module's default TEMPLATE.
+    first_plume = None
+    for s in ev.get('subtypes', []):
+        p = s.get('plume')
+        if p and p.get('template'):
+            first_plume = p
+            break
+    do_mint_wf = mint_wf and first_plume is not None
     sub_detail = {s.get('name'): s for s in ctx.get('subtypes', [])}
 
     existing = []
@@ -318,9 +398,17 @@ def engine_variant_cfg(part, ev, ctx):
          '// Engine-config variants: full new B9PS subtypes (thrust/ISP/heat/fuel + optional plume).',
          '@PART[%s]:FINAL' % part, '{']
 
+    # §10.1: mint the part-level ModuleWaterfallFX once (before the B9PS section) when the part has
+    # none and at least one variant carries a plume.
+    if do_mint_wf:
+        L += _minted_wf_module(first_plume, 1)
+
     if existing:
         L.append('  @MODULE[ModuleB9PartSwitch]:HAS[#moduleID[%s]]' % b9)
         L.append('  {')
+        # Emit the +SUBTYPE copies FIRST so each snapshots its copyFrom BEFORE the shipped-subtype
+        # WF-disable edits below rename-immune it (+SUBTYPE snapshots at copy time; the @SUBTYPE
+        # disables target the original names, and the copies are renamed via @name).
         for s in existing:
             cf = s.get('copyFrom')
             det = sub_detail.get(cf, {})
@@ -342,10 +430,32 @@ def engine_variant_cfg(part, ev, ctx):
             L += _engine_data_module(target, s.get('fields'), s.get('propellants'), has_ovr, 3)
             if s.get('plume'):
                 # copyFrom's copied subtype may already carry a WF override → edit it in place;
-                # otherwise add one. Mirrors the plume Case-B logic (§7.10).
-                wf_ovr = bool(det.get('hasWfOverride')) and det.get('wfOverrideCount', 0) == 1
+                # otherwise add one. Mirrors the plume Case-B logic (§7.10). When we minted the WF
+                # module, the copy has no override of it → add one (wf_ovr stays False).
+                wf_ovr = (not mint_wf) and bool(det.get('hasWfOverride')) and det.get('wfOverrideCount', 0) == 1
                 L += _subtype_edit_block(s['plume'], wf_ovr, wf, 3)
+            elif do_mint_wf:
+                # §10.1: a plumeless copy would inherit the minted WF's seeded plume — disable it.
+                L += _wf_disable_block(wf, 3)
+            model_scale = s.get('modelScale')
+            root_transforms = ctx.get('rootTransforms') or []
+            if model_scale and root_transforms:
+                # copyFrom may already carry TRANSFORM blocks (scaleOffsets non-empty) — replace
+                # rather than stack (§8.4).
+                if det.get('scaleOffsets'):
+                    L.append('      !TRANSFORM,*{}')
+                L += _scale_transform_blocks(model_scale, root_transforms, 3)
             L.append('    }')
+        # §10.1: after the copies, disable the minted WF in every SHIPPED subtype so stock configs
+        # stay visually stock.
+        if do_mint_wf:
+            for det in ctx.get('subtypes', []):
+                if det.get('isBase'):
+                    continue
+                L.append('    @SUBTYPE[%s]' % det.get('name'))
+                L.append('    {')
+                L += _wf_disable_block(wf, 3)
+                L.append('    }')
         L.append('  }')
 
     if mint:
@@ -357,6 +467,10 @@ def engine_variant_cfg(part, ev, ctx):
         L.append('    SUBTYPE')
         L.append('    {')
         L.append('      name = Stock')
+        # §10.1: the minted WF module is active-by-default (it carries a seeded TEMPLATE) — the
+        # Stock subtype must disable it so "Stock" stays visually stock.
+        if do_mint_wf:
+            L += _wf_disable_block(wf, 3)
         L.append('    }')
         for s in mint:
             L.append('    SUBTYPE')
@@ -373,6 +487,13 @@ def engine_variant_cfg(part, ev, ctx):
             L += _engine_data_module(target, s.get('fields'), s.get('propellants'), False, 3)
             if s.get('plume'):
                 L += _subtype_edit_block(s['plume'], False, wf, 3)
+            elif do_mint_wf:
+                # §10.1: a plumeless minted subtype must also hide the seeded default plume.
+                L += _wf_disable_block(wf, 3)
+            model_scale = s.get('modelScale')
+            root_transforms = ctx.get('rootTransforms') or []
+            if model_scale and root_transforms:
+                L += _scale_transform_blocks(model_scale, root_transforms, 3)
             L.append('    }')
         L.append('  }')
 
@@ -477,11 +598,24 @@ def _validate_engine_variants(part, ev, ctx, known_templates, errors):
                         errors.append('%s: variant %r references unknown transform %r'
                                       % (part, name, t))
 
+        model_scale = s.get('modelScale')
+        if model_scale:
+            if not _is_num(model_scale) or float(model_scale) <= 0:
+                errors.append('%s: variant %r modelScale %r is not a positive number'
+                              % (part, name, model_scale))
+            elif not (ctx.get('rootTransforms') or []):
+                errors.append('%s: variant %r sets modelScale but model root unknown for %s'
+                              % (part, name, part))
+
         plume = s.get('plume')
         if plume:
-            if not ctx.get('wfModuleID'):
-                errors.append('%s: variant %r has a custom plume but the part has no ModuleWaterfallFX'
-                              % (part, name))
+            # §10.1: a part with NO ModuleWaterfallFX is no longer refused — we mint one
+            # (moduleID=eeWaterfall). Only require the minted moduleID not collide with an existing
+            # module on the part.
+            if not ctx.get('wfModuleID') and MINT_WF_MODULE_ID in (
+                    (ctx.get('b9ModuleIDs') or []) + [ctx.get('wfModuleID') or '']):
+                errors.append('%s: cannot mint ModuleWaterfallFX — moduleID %r already exists on the '
+                              'part; refused' % (part, MINT_WF_MODULE_ID))
             if plume.get('template') not in known_templates:
                 errors.append('%s: variant %r plume references unknown template %r'
                               % (part, name, plume.get('template')))
